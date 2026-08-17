@@ -46,3 +46,11 @@ Backup_*/
 # ============ 临时诊断日志 ============
 _Diagnostics_*.log
 _Diagnostics_*.txt
+
+# ============ 新资源包（08-17 加入，后续可能用；体积大不提交，只留磁盘）============
+Assets/CombatGirlsCharacterPack/
+Assets/CombatGirlsCharacterPack.meta
+Assets/PostApocalypseGuns/
+Assets/PostApocalypseGuns.meta
+Assets/Rifle_01_v25/
+Assets/Rifle_01_v25.meta
