@@ -48,7 +48,9 @@ _Diagnostics_*.log
 _Diagnostics_*.txt
 
 # ============ 新资源包（08-17 加入，后续可能用；体积大不提交，只留磁盘）============
-Assets/CombatGirlsCharacterPack/
+# CombatGirlsCharacterPack：忽略全部内容，仅放行 CLAUDE.md（包说明入库）
+Assets/CombatGirlsCharacterPack/*
+!Assets/CombatGirlsCharacterPack/CLAUDE.md
 Assets/CombatGirlsCharacterPack.meta
 Assets/PostApocalypseGuns/
 Assets/PostApocalypseGuns.meta
