@@ -1,0 +1,48 @@
+# ============ Unity 生成文件（绝对不要提交）============
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+[Mm]emoryCaptures/
+[Rr]ecordings/
+sysinfo.txt
+*.stackdump
+# 场景伴生光照设置（Unity 生成、可再生成；第三方演示场景噪音，08-17 起忽略）
+*.lighting
+
+# ============ IDE / 编译产物 ============
+.vs/
+.idea/
+.vscode/
+*.csproj
+*.sln
+*.suo
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+.opendb
+*.VC.db
+*.orig
+*.unityproj
+*.vscode
+
+# ============ 操作系统 ============
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ============ 本项目手动备份 / 还原点（改用 Git 后不再需要，留在磁盘但不进版本库）============
+_Backup_*/
+_RestorePoint_*/
+Backup_*/
+
+# ============ 临时诊断日志 ============
+_Diagnostics_*.log
+_Diagnostics_*.txt
