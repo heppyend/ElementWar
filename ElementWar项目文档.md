@@ -902,7 +902,7 @@ New Input System 生成的包装类持有原生资源，`OnDestroy` 必须 `Disp
 
 | 类别 | 文件 |
 |------|------|
-| 项目文档 | `README.md`（总览）、`PROJECT_NOTES.md`（复习笔记）、`CLAUDE.md`（AI 辅助开发指南）、`FPS_HUNTER_DEV.md`（Hunter 开发日志）、本文件（面试复盘） |
+| 项目文档 | `PROJECT_NOTES.md`（复习笔记）、`CLAUDE.md`（AI 辅助开发指南）、`FPS_HUNTER_DEV.md`（Hunter 开发日志）、本文件（面试复盘） |
 | 核心脚本 | `Assets/Scripts/`（Base / Utils / Manager / Player / Enemy / UI / FPS / Diagnostics） |
 | 编辑器向导 | `Assets/Scripts/Editor/`（Tools/玩家 菜单：Hunter 四件套 + NavMesh 三件套 + 角色接入/还原） |
 | 输入配置 | `Assets/Settings/InputSystem/MyInputSystem.inputactions` |

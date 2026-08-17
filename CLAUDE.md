@@ -28,9 +28,24 @@ There is no CI/CD or headless build pipeline configured.
 | `com.unity.probuilder@5.2.4` | In-editor level prototyping |
 | CLazyRunnerActionAnimPack | 跑酷动作包（`Assets/CLazyRunnerActionAnimPack/`），提供全部移动/跳跃/滑铲动画片段 |
 
+### 新增资源包（2026-08-17 加入，勿删）
+
+| 资源包 | 目录 | 内容 |
+|--------|------|------|
+| 武器音效包 | `Assets/PostApocalypseGuns/` | 按枪种（步枪/手枪/霰弹/狙击/机枪）分的 .wav 枪声，1p/3p/far 变体 |
+| TPS 人物动作包 | `Assets/Rifle_01_v25/` | MotusMan_v2 人物 + M4_Rifle_01 步枪 + 步枪动画（FBX/Animation）+ `RH_WP Avatar Mask.mask` + Docs |
+| 二次元人物动作包及模型 | `Assets/CombatGirlsCharacterPack/` | RifleGirl / Humanoid_Bot（模型/材质/动画/预制体）+ Biperworks_Tools 武器控制 + 示例场景 |
+
 ## Architecture
 
-The architecture is fully documented in **`Assets/Scripts/README.md`** — read that first. Here is the summary:
+> 📂 **模块文档索引**（子目录 `CLAUDE.md`，读该模块代码时自动加载，改对应目录必读）：
+> - [`Assets/Scripts/Player/CLAUDE.md`](Assets/Scripts/Player/CLAUDE.md) — 玩家系统：状态流转 / FPS 式移动 / 人机 / Hunter 无武器
+> - [`Assets/Scripts/Enemy/CLAUDE.md`](Assets/Scripts/Enemy/CLAUDE.md) — 敌人系统：追击 / 攻击闭环 / 受击 / 死亡
+> - [`Assets/Scripts/Editor/CLAUDE.md`](Assets/Scripts/Editor/CLAUDE.md) — 编辑器向导：Tools/玩家 + Tools/场景 铁律
+> - [`Assets/Scripts/FPS/CLAUDE.md`](Assets/Scripts/FPS/CLAUDE.md) — FPS 原型框架（New Scene 沙盒）
+> - [`Assets/Resource/Models/CLAUDE.md`](Assets/Resource/Models/CLAUDE.md) — 模型导入：MMD/URP/Blender 手册
+
+> 模块级细节见上；以下是全局架构摘要：
 
 ### Player System
 
@@ -166,6 +181,9 @@ Aiming is checked in `PlayerStateBase.Update()` every frame — when `isAiming` 
 | 角色预制体 | `Assets/Resource/Prefabs/`（`Lumine FBX.prefab` / `Pilot Furina.prefab` / `Hunter.prefab` / `丘丘人.prefab` / `HealthBar.prefab`） |
 | 移动/瞄准控制器 | `Assets/Resource/Animations/Player/`（`TPS_Movement.controller` 三角色共用 / `Hunter_Parkour.controller` Hunter 专属） |
 | 跑酷动作包 | `Assets/CLazyRunnerActionAnimPack/` |
+| 武器音效包（08-17 新加） | `Assets/PostApocalypseGuns/`（按枪种 .wav 枪声，1p/3p/far） |
+| TPS 人物动作包（08-17 新加） | `Assets/Rifle_01_v25/`（MotusMan + M4 步枪 + 步枪动画 + Avatar Mask） |
+| 二次元人物动作包及模型（08-17 新加） | `Assets/CombatGirlsCharacterPack/`（RifleGirl/Humanoid_Bot + 动画 + 武器控制） |
 | Toon shader plugin | `Assets/Plugins/YSA Toon/` |
 | 特效插件 | `Assets/Plugins/EffectCore/` |
 | Main scene | `Assets/Scenes/Game.unity`（GameStart 为主菜单；`New Scene.unity` 为 FPS 沙盒实验场） |
@@ -196,9 +214,11 @@ Aiming is checked in `PlayerStateBase.Update()` every frame — when `isAiming` 
 | Enums | PascalCase (`PlayerState.Idle`, `EnemyState.Move`) |
 | Comments | Chinese (中文) |
 
+> ⚠️ 刻意保留拼写（非笔误）：`StateMechaine`、`Destory()`、`updataAction`。新代码用标准拼写（见各子目录 CLAUDE.md）。
+
 ## Critical Implementation Details
 
-- **Slope flicker mitigation**: `cc.isGrounded` is unreliable on slopes. The system uses `HOVER_STABILITY_FRAMES` (currently **5** ≈ 0.083s@60fps) as a buffer — gravity is locked at `-2f` within the window. Only after the window expires does real gravity accumulate and the state transitions to Hover. See `Assets/Scripts/README.md` Bug #3-#7 for the full history.
+- **Slope flicker mitigation**: `cc.isGrounded` is unreliable on slopes. The system uses `HOVER_STABILITY_FRAMES` (currently **5** ≈ 0.083s@60fps) as a buffer — gravity is locked at `-2f` within the window. Only after the window expires does real gravity accumulate and the state transitions to Hover. 历史详见 `Assets/Scripts/Player/CLAUDE.md`（斜坡三层防护由来）。
 - **`IsHover()`** uses `Physics.SphereCast` from the actual CharacterController bottom position (accounting for `cc.center`, `cc.height`, `cc.skinWidth`, and `cc.radius`), NOT a simple `transform.position` raycast. 起飞用 `IsHover()`（距离检测）+ 落地用 `cc.isGrounded`（接触检测）的不对称是**有意设计**。
 - **`MyInputSystem.cs`** is auto-generated — edit the `.inputactions` asset, not the C# file.
 - **`OnAnimatorMove()`**: FPS 式移动（`useFPSMovement=true`）时**直接 return 丢弃根运动**（但 `applyRootMotion` 保持 true——Animation Rigging 约束依赖它求值）；旧方案下平均后 3 帧 `animator.velocity`，Hover 时用它维持惯性，并每帧叠加手动 `verticalSpeed`。
