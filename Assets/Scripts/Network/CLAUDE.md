@@ -14,7 +14,10 @@ Unity 客户端 (Assets/Scripts/Network/)          .NET 服务器 (Server/)
 
 ## 关键约定
 
-- **简化移动模型**（C# 服务器跑不了 CharacterController）：服务器 `GameWorld.SimulatePlayer` 与客户端 `PvPMotor` 数学一致（walk2.2/jog5/sprint8/aim2.5、gravity-15、jump6.7）。改任一端常量必须同步另一端。PVP 无墙碰撞（掩体纯视觉）。
+- **简化移动模型**（C# 服务器跑不了 CharacterController）：服务器 `GameWorld.SimulatePlayer` 与客户端 `PvPMotor` 数学一致（walk2.2/jog5/sprint8/aim2.5、gravity-15、jump6.7、slide0.8s/初速7/末速1.5/冲刺加成2）。改任一端常量必须同步另一端。PVP 无墙碰撞（掩体纯视觉）。
+- **滑铲是服务器计时状态**：客户端 isSlide 只在一个 30Hz 帧为 true（NetClient 锁存 0.12s 发完即清），服务器 `GameWorld` 收到后启动 `SlideTicksRemaining` 计时（方向锁 input.WorldMove 或当前朝向、速度衰减、强制贴地），不依赖后续输入；跳跃可中断。MoveState=5 供远端播 RunningSlide。
+- **角色动画统一 `TPS_Movement.controller`（混合版，PVE/PVP 共用）**：Locomotion 混合树 **Idle/Walk/Jog 段用旧 X Bot 动画**（`@Idle` / `@Run forward`，Speed 阈值 0/.33/.66，fileID -203655887218126122）、**Sprint 段用跑酷 `Mvm_Dash`**（Speed 1）、**Air 混合树用旧 `@Hover`**、滑铲跑酷 `Esc_Slide_Loop`、瞄准 X Bot strafe。两套动画都 Humanoid 可跨骨骼 retarget。⚠️ PVP 曾用独立 `TPS_Movement_PVP.controller`（08-19 已删，统一回 TPS_Movement）；Hunter 仍用 `Hunter_Parkour.controller`。
+- **开火手感复制 PVE**：NetClient.SendFire 客户端限速 0.15s（与 PVE bulletInterval 一致）+ 调 `weapon.Fire(_aimPoint)` 走完整 PVE 视觉（Rigidbody 弹道 + 枪口火花 EffectPool + Fired 事件触发 WeaponAudio 枪声），伤害由服务器权威判定、视觉子弹对玩家无效。服务器 `FireCooldownSeconds` 已对齐 0.15f（否则视觉 6.67 发/秒只有 1/5 结算）。开火/受击相机震动走 `PVPCameraRig.ShakeCamera()`（ImpulseSource+ImpulseListener 挂瞄准 FreeLook）。
 - **两端 DTO 严格一致**：服务器 `Server/Messages.cs`（JsonPropertyName camelCase）↔ 客户端 `Transport/NetMessages.cs`（public camelCase 字段）。改协议两端一起改。
 - **输入 tick 对齐**：`ServerWelcome.serverTick` 给客户端对齐 `inputTick` 基线（否则被判"太旧"拒绝）。服务器 latest-input 语义 + 6 tick key-up 丢失窗口。
 - **玩家只控 1 角色**：PVP 屏蔽 AI 队友。PlayerModel 置 `disableStateMachine=true`，位移由 PvPMotor 驱动 transform（无 CharacterController 位移）；NavMeshAgent 禁用。

@@ -95,6 +95,13 @@ public class PlayerMoveState : PlayerStateBase
                 }
                 playerModel.animator.SetFloat(moveBlendHash, moveBlend);
                 #endregion
+
+                #region 冲刺代码位移（旧 root motion 方案：MoveBlend→1 播跑酷 Mvm_Dash 原地动画无根运动，位移由 horizontalVelocity 驱动，OnAnimatorMove 消费）
+                playerModel.isSprinting = playerController.isSprint;
+                playerModel.horizontalVelocity = playerController.isSprint
+                    ? playerController.worldMovement * playerModel.sprintSpeed
+                    : Vector3.zero;
+                #endregion
             }
 
             #region 处理方向（两方案共用）

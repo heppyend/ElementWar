@@ -36,6 +36,7 @@ namespace ElementWar.Net
         private float _xAxis;
         private float _yAxis = 0.5f;
         private bool _aiming;
+        private CinemachineImpulseSource _impulse;   // 开火/受击相机震动（PVE 同款：挂瞄准相机）
 
         private void Awake()
         {
@@ -62,6 +63,17 @@ namespace ElementWar.Net
             _aim = CreateFreeLook("PVP_FreeLook_Aim", aimRadius, aimHeight, aimFov);
             _normal.Priority = 100;
             _aim.Priority = 0;
+
+            // 开火/受击相机震动（PVE 同款）：ImpulseSource + ImpulseListener 都挂瞄准虚拟相机
+            // （ImpulseListener 挂 Main Camera 会报 "requires a virtual camera"，必须挂 vcam）
+            _impulse = _aim.gameObject.AddComponent<CinemachineImpulseSource>();
+            _aim.gameObject.AddComponent<CinemachineImpulseListener>();
+        }
+
+        /// <summary>开火/受击相机震动（NetClient 调用）。</summary>
+        public void ShakeCamera()
+        {
+            if (_impulse != null) _impulse.GenerateImpulse();
         }
 
         private void Update()

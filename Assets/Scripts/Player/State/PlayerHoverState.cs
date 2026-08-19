@@ -18,6 +18,13 @@ public class PlayerHoverState : PlayerStateBase
         // 对应 Hunter_Parkour.controller 的 HoverJump 混合树阈值 0/1/2。仅 randomJumpClips=true 的角色（Hunter）生效。
         if (playerModel.randomJumpClips)
             playerModel.SetFloatParam(PlayerModel.HoverClipHash, Random.Range(0, 3));
+
+        // 斜抛：记录起跳水平初速度 = 当前移动方向 × 当前速度（替代旧 averageDeltaMovement 动画缓存惯性）。
+        // 站立跳（无移动输入）水平为 0 → 竖直跳；跑动/冲刺跳 → 向前上方斜抛。
+        Vector3 move = playerController != null ? playerController.worldMovement : Vector3.zero;
+        move.y = 0f;
+        float speed = playerModel.isSprinting ? playerModel.sprintSpeed : playerModel.jogSpeed;
+        playerModel.jumpHorizontalVelocity = move.sqrMagnitude > 0.01f ? move.normalized * speed : Vector3.zero;
     }
 
     public override void Update()
@@ -49,8 +56,10 @@ public class PlayerHoverState : PlayerStateBase
         else
         {
             #region 空中水平移动控制（旧 root motion 方案：直接 cc.Move）
-            // 仅在玩家操控时生效，叠加在 OnAnimatorMove 的跳跃惯性之上，可微调空中方向
-            if (IsBeControl())
+            // ⚠️ 仅在空中时才做水平微调：贴地后若仍调 cc.Move(水平, Y=0)，会把 isGrounded 刷成 false，
+            // 导致下方落地检测失效 → 角色落地后卡在 Hover 悬停（bug 根因，见 08-19 诊断）
+            // 叠加在 OnAnimatorMove 的跳跃惯性之上，可微调空中方向
+            if (IsBeControl() && !playerModel.cc.isGrounded)
             {
                 playerModel.cc.Move(playerController.worldMovement * airControlSpeed * Time.deltaTime);
             }
@@ -58,11 +67,11 @@ public class PlayerHoverState : PlayerStateBase
         }
 
         #region 检测角色是否落在地面上
-        // 落地用 cc.isGrounded（接触检测），起飞用 IsHover()（距离检测）
-        // 二者不对称是有意为之：
-        // - 起飞需要 fallHeight 阈值防止地面小颠簸误触发
-        // - 落地需要 cc.Move() 的精确碰撞检测，SphereCast 在 CC 落地瞬间可能不可靠
-        if (playerModel.cc.isGrounded)
+        // 落地用 cc.isGrounded（接触检测）+ IsHover()（距离）双保险：
+        // - cc.isGrounded：主检测（接触）
+        // - !IsHover()：兜底（离地 < fallHeight 即视为落地），防水平 cc.Move 刷新 isGrounded 误判
+        // 起飞用 IsHover()（距离检测），落地主用 cc.isGrounded（接触）——不对称保留，但补距离兜底
+        if (playerModel.cc.isGrounded || !playerModel.IsHover())
         {
             playerModel.SwitchState(PlayerState.Idle);
         }

@@ -139,7 +139,7 @@ namespace ElementWar.Net
                 _animator.SetBool(PlayerModel.IsGroundedHash, a.isGrounded);
                 _animator.SetFloat(PlayerModel.VerticalSpeedHash, Mathf.Lerp(a.verticalSpeed, b.verticalSpeed, t));
 
-                // 状态切换（与 PVE 一致：0 idle 1 move 2 sprint 3 aim 4 hover），否则远端只在 Idle 平移
+                // 状态切换（与 PVE 一致：0 idle 1 move 2 sprint 3 aim 4 hover 5 slide），否则远端只在 Idle 平移
                 if (!IsDead)
                 {
                     int desired;
@@ -149,12 +149,17 @@ namespace ElementWar.Net
                         case 2: desired = 1; break;   // Move（Sprint 靠 Speed→1 走 Dash 段）
                         case 3: desired = 2; break;   // Aiming
                         case 4: desired = 3; break;   // Hover
+                        case 5: desired = 4; break;   // Slide
                         default: desired = 0; break;  // Idle
                     }
                     if (desired != _animState)
                     {
                         _animState = desired;
-                        string stateName = desired == 3 ? "Hover" : desired == 2 ? "Aiming" : desired == 1 ? "Move" : "Idle";
+                        string stateName = desired == 4 ? "RunningSlide"
+                            : desired == 3 ? "Hover"
+                            : desired == 2 ? "Aiming"
+                            : desired == 1 ? "Move"
+                            : "Idle";
                         _animator.CrossFadeInFixedTime(stateName, 0.25f);
                     }
                 }

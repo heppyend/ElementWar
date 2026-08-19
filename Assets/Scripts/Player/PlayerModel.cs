@@ -22,6 +22,8 @@ public class PlayerModel : MonoBehaviour,IStateMachineOwner
     public CharacterController cc;
     private StateMechaine stateMechaine;//动画状态机
     private PlayerState currentState;//当前状态
+    /// <summary>当前状态机状态（只读，诊断用）。</summary>
+    public PlayerState CurrentState => currentState;
 
     #region 约束相关
     public TwoBoneIKConstraint rightHandConstraint;//正常状态下的右手约束
@@ -70,6 +72,10 @@ public class PlayerModel : MonoBehaviour,IStateMachineOwner
     [Tooltip("跳跃是否在 Hunter_Parkour 控制器的 3 个跑酷跳跃片段（jmp_base_B / jmp_Move_left / jmp_BackAir）中随机选 1 个播放。\n" +
              "仅 Hunter 启用，其他角色为 false 不受影响")]
     public bool randomJumpClips = false;
+    [Tooltip("跳跃空中水平速度衰减（0=真空斜抛水平匀速，最远；越大落点越近越可控）")]
+    public float jumpAirDrag = 1.5f;
+    [HideInInspector]
+    public Vector3 jumpHorizontalVelocity;//跳跃水平初速度（斜抛：PlayerHoverState.Enter 记录，空中带空气阻力衰减）
     [Tooltip("禁用状态机与 CharacterController 位移（PVP 网络玩家用）：由 PvPMotor 驱动 transform.position 和 Animator，\n" +
              "服务器与客户端使用同一简化移动模型。PVE 为 false 不受影响")]
     public bool disableStateMachine = false;
@@ -415,13 +421,22 @@ public class PlayerModel : MonoBehaviour,IStateMachineOwner
             // 原因：Running Slide 动画自带的根位移方向是骨骼侧向（非角色正前方），直接使用会导致"向左滑铲/空中飞踢"。
             playerDeltaMovement = Vector3.zero;
         }
+        else if (currentState == PlayerState.Sprint || (currentState == PlayerState.Move && isSprinting))
+        {
+            // 冲刺动画（跑酷 Mvm_Dash）是原地动作无根运动，位移由代码 horizontalVelocity 驱动
+            //（FPS 式 PlayerSprintState / 旧方案 PlayerMoveState 每帧写入 worldMovement * 冲刺速度）
+            playerDeltaMovement = new Vector3(horizontalVelocity.x, 0f, horizontalVelocity.z) * Time.deltaTime;
+        }
         else if (currentState != PlayerState.Hover)
         {
             UpdateAverageCachsSpeed(animator.velocity);
         }
         else
         {
-            playerDeltaMovement=averageDeltaMovement*Time.deltaTime;
+            // 斜抛：水平用起跳初速度（jumpHorizontalVelocity，Enter 时记录），带空气阻力衰减；
+            // 垂直 vy 由下方统一叠加（上抛 + 重力）。
+            playerDeltaMovement = jumpHorizontalVelocity * Time.deltaTime;
+            jumpHorizontalVelocity *= (1f - jumpAirDrag * Time.deltaTime);
         }
         playerDeltaMovement.y=verticalSpeed*Time.deltaTime;
 

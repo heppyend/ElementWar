@@ -15,10 +15,14 @@ public sealed class GameWorldSettings
     public float AimMoveSpeed = 2.5f;
     public float GroundY = 0.15f;              // 角色原点基本在脚底（CC 底≈原点），少量余量防穿模
     public float JumpVelocity = 6.7f;          // sqrt(2*15*1.5)
+    public float SlideDurationSeconds = 0.8f;  // 滑铲（与客户端 PvPMotor 一致）
+    public float SlideStartSpeed = 7f;
+    public float SlideEndSpeed = 1.5f;
+    public float SprintSlideBoost = 2f;
     public float RotationSpeedDeg = 300f;
     public int MaxHealth = 100;
     public int FireDamage = 25;
-    public float FireCooldownSeconds = 0.75f;
+    public float FireCooldownSeconds = 0.15f;   // 与客户端视觉射速一致（PVE bulletInterval=0.15s），否则视觉 6.67 发/秒只有 1/5 结算
     public float RespawnSeconds = 3f;
     public float FireRange = 35f;
     public float HitRadius = 1.2f;
@@ -66,6 +70,10 @@ public sealed class ServerPlayer
     public float SpeedBlend;
     public int MoveState;                       // 0 idle 1 move 2 sprint 3 aim 4 hover
     public bool JumpQueued;                     // 跳跃锁存：任意一条输入触发后保留到起跳（防 latest-input 吞掉瞬发）
+    public bool IsSliding;                      // 滑铲进行中（计时状态，不依赖后续输入）
+    public int SlideTicksRemaining;
+    public Vec3 SlideDirection;
+    public bool SlideSprintBoost;               // 滑铲开始时是否冲刺（加成固定，不用中途输入）
     public float GroundY = 0.05f;               // 每角色脚底偏移（角色原点≠脚底，且角色间不同：荧0.025/芙宁娜0.15）
     public readonly SortedDictionary<int, PlayerInputMessage> PendingInputs = new();
     public readonly SortedDictionary<int, FireRequestMessage> PendingFires = new();
@@ -228,14 +236,26 @@ public sealed class GameWorld
         return input;
     }
 
+    private int SlideTotalTicks => (int)Math.Round(Settings.SlideDurationSeconds * Settings.ServerTickRate);
+
     private void SimulatePlayer(ServerPlayer p, PlayerInputMessage? input, float dt)
     {
-        // 跳跃：独立于当前输入帧处理（JumpQueued 跨 tick 保留，即使本 tick 无新输入也起跳）
+        // 跳跃：独立于当前输入帧处理（JumpQueued 跨 tick 保留，即使本 tick 无新输入也起跳）。
+        // 跳跃可中断滑铲。
         if (p.IsGrounded && p.JumpQueued)
         {
             p.VerticalSpeed = Settings.JumpVelocity;
             p.IsGrounded = false;
             p.JumpQueued = false;
+            p.IsSliding = false;
+            p.SlideTicksRemaining = 0;
+        }
+
+        // 滑铲：计时状态，优先于正常移动（不依赖后续输入，无输入也滑完）
+        if (p.IsSliding)
+        {
+            StepSlide(p, dt);
+            return;
         }
 
         if (input is null)
@@ -246,6 +266,24 @@ public sealed class GameWorld
                 p.SpeedBlend = 0f;
                 p.MoveState = 0;
             }
+            return;
+        }
+
+        // 滑铲触发：地面 + 本帧 isSlide（客户端 isSlide 只在一个 30Hz 帧为 true，发完即清锁存）
+        if (p.IsGrounded && input.IsSlide)
+        {
+            p.IsSliding = true;
+            p.SlideTicksRemaining = SlideTotalTicks;
+            Vec3 slideDir = new Vec3(input.WorldMoveX, 0f, input.WorldMoveZ).NormalizedXZ();
+            if (slideDir.Magnitude <= 0.01f)
+            {
+                // 无移动输入：沿用当前朝向
+                float yawRad = p.BodyYawDeg * MathF.PI / 180f;
+                slideDir = new Vec3(MathF.Sin(yawRad), 0f, MathF.Cos(yawRad));
+            }
+            p.SlideDirection = slideDir;
+            p.SlideSprintBoost = input.IsSprint;
+            StepSlide(p, dt);
             return;
         }
 
@@ -304,6 +342,32 @@ public sealed class GameWorld
             p.SpeedBlend = 0f;
         }
     }
+
+    /// <summary>滑铲推进：方向锁定、速度衰减、强制贴地（与客户端 PvPMotor 数学一致）。</summary>
+    private void StepSlide(ServerPlayer p, float dt)
+    {
+        float total = SlideTotalTicks;
+        float t = total > 0 ? p.SlideTicksRemaining / total : 0f;   // 1→0
+        float speed = Lerp(Settings.SlideEndSpeed, Settings.SlideStartSpeed, t);
+        if (p.SlideSprintBoost) speed += Settings.SprintSlideBoost * t;
+
+        Vec3 delta = p.SlideDirection * (speed * dt);
+        Vec3 newPos = new Vec3(
+            Math.Clamp(p.Position.X + delta.X, -Settings.ArenaHalfExtent, Settings.ArenaHalfExtent),
+            p.GroundY,
+            Math.Clamp(p.Position.Z + delta.Z, -Settings.ArenaHalfExtent, Settings.ArenaHalfExtent));
+
+        p.Position = newPos;
+        p.VerticalSpeed = 0f;
+        p.IsGrounded = true;
+        p.SlideTicksRemaining--;
+        if (p.SlideTicksRemaining <= 0) p.IsSliding = false;
+
+        p.MoveState = 5;   // slide（客户端 RemoteAvatar 播 RunningSlide）
+        p.SpeedBlend = 0.66f;
+    }
+
+    private static float Lerp(float a, float b, float t) => a + (b - a) * t;
 
     private void StoreHistory(ServerPlayer p)
     {

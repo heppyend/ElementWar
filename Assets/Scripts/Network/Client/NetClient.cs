@@ -38,7 +38,11 @@ namespace ElementWar.Net
         private float _inputAccumulator;
         private float _lastRttSampleTime;
         private float _estimatedRtt;
-        private int _jumpHoldFrames;   // 跳跃保持帧数：瞬发 trigger 撑几帧，保证 30Hz 上报不被丢
+        private float _fireRequestInterval = 0.15f;   // 客户端开火限速（与 PVE bulletInterval 一致；服务器权威冷却需同步 GameWorldSettings）
+        private float _lastFireRequestTime;
+        private PVPCameraRig _camRig;                  // 相机震动（懒查找缓存）
+        private float _jumpHoldUntil;   // 跳跃锁存截止时间（时间制，跨帧率可靠；撑到首个 30Hz 帧携带）
+        private float _slideHoldUntil;  // 滑铲锁存截止时间（同上）
 
         private MyInputSystem _input;
         private Camera _mainCamera;
@@ -116,14 +120,9 @@ namespace ElementWar.Net
             SampleInput();
             if (_localMotor != null) PushInputToMotor();
 
-            // 跳跃/滑铲是瞬发：立即上报不等 30Hz 累积，降低按键响应延迟
-            if (_input.Player.IsJumping.triggered || _slide)
-            {
-                _inputAccumulator = 0f;
-                SendInput();
-            }
-
             // 按 30Hz 上报输入
+            // ⚠️ 不做跳跃/滑铲即时上报：即时上报每次多 +1 inputTick → 玩一阵就漂移超前>30 被服务器拒收 → 回弹/抖动。
+            // 瞬发触发靠时间制锁存（SampleInput 里 hold 0.12s）撑到下一个 30Hz 帧携带，延迟 ≤33ms 可忽略。
             _inputAccumulator += Time.deltaTime;
             if (_inputAccumulator >= 1f / _serverTickRate)
             {
@@ -147,10 +146,10 @@ namespace ElementWar.Net
             _sprint = _input.Player.IsSprint.IsPressed();
             _aiming = _input.Player.IsAiming.IsPressed();
             _fire = _input.Player.Fire.IsPressed();
-            if (_input.Player.IsJumping.triggered) _jumpHoldFrames = 3; // 锁存跳跃（30Hz 上报可能错过 1 帧的 triggered）
-            _jumping = _jumpHoldFrames > 0;
-            if (_jumpHoldFrames > 0) _jumpHoldFrames--;
-            _slide = _input.Player.IsSlide.triggered;
+            if (_input.Player.IsJumping.triggered) _jumpHoldUntil = Time.time + 0.12f; // 锁存 0.12s（=3 个 30Hz tick，时间制跨帧率可靠）
+            _jumping = _jumpHoldUntil > Time.time;
+            if (_input.Player.IsSlide.triggered) _slideHoldUntil = Time.time + 0.12f;
+            _slide = _slideHoldUntil > Time.time;
 
             // 相机相对 → 世界移动方向（与 PVE PlayerController 一致）
             Vector3 camF = _mainCamera != null ? _mainCamera.transform.forward : Vector3.forward;
@@ -205,8 +204,9 @@ namespace ElementWar.Net
 
         private void SendInput()
         {
-            // inputTick 跟随服务器快照（lastServerTick+2 前瞻），不再无界自增——
-            // 否则每次跳跃/滑铲的即时上报多 +1，玩一阵就漂移超前>30 被服务器拒收 → 回弹/抖动
+            // inputTick 下限跟随服务器快照（lastServerTick+2 前瞻）：防"落后漂移"（低帧率/卡顿导致
+            // inputTick 增速 < 服务器 tick 增速 → 被 ServerTick-120 判太旧拒收）。
+            // 超前漂移源（跳跃/滑铲即时上报）已在 Update 删除，靠时间锁存只让 30Hz 帧携带一次。
             _inputTick = Math.Max(_inputTick + 1, _lastServerTick + 2);
             var msg = new PlayerInputMessage
             {
@@ -231,6 +231,11 @@ namespace ElementWar.Net
             };
             _socket.SendJson(JsonUtility.ToJson(msg));
 
+            // 触发状态只让首个 30Hz 帧携带一次，发完立即清锁存——
+            // 否则持续多帧 isJumping=true 会让服务器 JumpQueued 反复锁存 → 落地瞬间自动跳
+            _jumpHoldUntil = 0f;
+            _slideHoldUntil = 0f;
+
             // 记录预测位置用于校正
             if (_localModel != null)
                 _predictionHistory[_inputTick] = _localModel.transform.position;
@@ -239,6 +244,11 @@ namespace ElementWar.Net
 
         private void SendFire()
         {
+            // 客户端射速限制：与 PVE PlayerWeapon.bulletInterval 一致（0.15s）——
+            // 否则按住开火每帧都发 FireRequest + 刷枪口/音效，视觉和带宽都爆
+            if (Time.time - _lastFireRequestTime < _fireRequestInterval) return;
+            _lastFireRequestTime = Time.time;
+
             _fireSequence++;
             var msg = new FireRequestMessage
             {
@@ -252,16 +262,17 @@ namespace ElementWar.Net
                 interpolationDelaySeconds = 0.1f,
             };
             _socket.SendJson(JsonUtility.ToJson(msg));
-            // 客户端视觉开火（枪口火花/音效由 PlayerWeapon 已有逻辑处理）
+
+            // 客户端视觉开火：完整复制 PVE——weapon.Fire 走子弹对象池（Rigidbody 弹道 + 命中特效）
+            // + 枪口火花（EffectPool）+ Fired 事件触发 WeaponAudio 枪声。伤害由服务器权威判定，
+            // 视觉子弹对玩家无效（只对 Enemy 标签结算，PVP 场景无 Enemy）。
             if (_localModel != null && _localModel.weapon != null)
             {
-                var weapon = _localModel.weapon;
-                var dir = (_aimPoint - weapon.bulletSpawnPoint.position).normalized;
-                EffectPool.INSTANCE.GetEffect(weapon.bulletSparkPrefab, weapon.bulletSpawnPoint.position, Quaternion.LookRotation(dir));
-                // 触发音效（复用 WeaponAudio）
-                var audio = weapon.GetComponent<WeaponAudio>();
-                if (audio != null) audio.NotifyFired();
+                _localModel.weapon.Fire(_aimPoint);
             }
+            // 开火相机震动（与 PVE PlayerAimingState.ShakeCamera 对应）
+            if (_camRig == null) _camRig = FindObjectOfType<PVPCameraRig>();
+            if (_camRig != null) _camRig.ShakeCamera();
         }
 
         private void SendAck(long eventId)
@@ -452,11 +463,17 @@ namespace ElementWar.Net
 
         private void HandleHit(HitEventMessage h)
         {
-            // 受击反馈：如果是自己被击中，闪红/震动（简化：日志）
-            if (h.targetPlayerId == _playerId)
+            if (h.targetPlayerId != _playerId) return;
+            // 受击反馈：命中点播受击特效 + 相机震动（对应 PVE TakeDamage → ShakeCamera）
+            Debug.Log($"[NetClient] 被 {h.shooterPlayerId} 击中 -{h.damage}");
+            if (_localModel != null && _localModel.weapon != null)
             {
-                Debug.Log($"[NetClient] 被 {h.shooterPlayerId} 击中 -{h.damage}");
+                var bulletPrefab = _localModel.weapon.bulletEffectPrefab;
+                if (bulletPrefab != null && bulletPrefab.impactPrefab != null)
+                    EffectPool.INSTANCE.GetEffect(bulletPrefab.impactPrefab, new Vector3(h.hitX, h.hitY, h.hitZ), Quaternion.identity);
             }
+            if (_camRig == null) _camRig = FindObjectOfType<PVPCameraRig>();
+            if (_camRig != null) _camRig.ShakeCamera();
         }
 
         private void HandleReliableEvent(string json)
