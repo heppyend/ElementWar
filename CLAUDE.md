@@ -76,7 +76,7 @@ EnemyBase (abstract) : MonoBehaviour, IStateMachineOwner
   → declares abstract SwitchState(EnemyState)
   → PlayStateAnimation() helper for CrossFadeInFixedTime
   → chaseTarget()（NavMeshAgent，isOnNavMesh 校验）/ FIndAttackTarget()（每 0.5s 刷新，打最近存活角色）
-  → Hurt()（受击动画 + 减速 + 喷血特效 + 扣血 + 血条）/ 死亡流程
+  → Hurt()（受击动画 + 减速 + 喷血/滴血特效（绿色，2026-08-19 换色）+ 扣血 + 血条）/ 死亡流程
 
 EnemyStateBase : StateBase
   → caches enemyModel reference from Init()
@@ -91,8 +91,13 @@ Enemy States: Idle → Move → Attack → Dead（攻击闭环已实现：进范
 
 ```
 PlayerWeapon : MonoBehaviour
-  → Fire(targetPos) — rate-limited by bulletInterval (0.15s ≈ 6.67 发/秒)
+  → Fire(targetPos) — rate-limited by bulletInterval (0.15s ≈ 6.67 发/秒)；成功发射广播 Fired 事件
   → 子弹走 Queue 对象池 + 枪口火花走 EffectPool（不再 Instantiate/Destroy）
+
+WeaponAudio : MonoBehaviour（可替换音效组件，挂在 PlayerWeapon 同物体）
+  → 订阅 PlayerWeapon.Fired 播枪声；fireClips 数组在 Inspector 里自由替换/增删即换枪声
+  → 当前分配：荧 M4A1 = AR_1p_01/02，芙宁娜 AK47 = AutoGun_1p_01/02（Assets/PostApocalypseGuns/AssaultRifles/）
+  → 挂载走 Tools/玩家/给两把枪挂载音效组件（M4/AK）（WeaponAudioWizard，幂等）
 
 PlayerWeaponBullet : MonoBehaviour
   → Rigidbody-based projectile (flyPower=30) + 帧间 Raycast 防穿透

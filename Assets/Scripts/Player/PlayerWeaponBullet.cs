@@ -116,7 +116,11 @@ public class PlayerWeaponBullet : MonoBehaviour
             {
                 EnemyBase enemy = hit.collider.GetComponent<EnemyBase>();
                 if (enemy != null)
+                {
+                    //把子弹位置锚定到实际命中点：受击/喷血特效从准确中弹处喷发（否则用帧末位置，偏进体内）
+                    transform.position = hit.point;
                     enemy.Hurt(this, 1);
+                }
             }
             //击中任何碰撞体后回池（防止穿墙）
             ReturnToPool();

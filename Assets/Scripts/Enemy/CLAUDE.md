@@ -30,7 +30,7 @@ Idle ──(有目标且不在攻击范围)──→ Move ──(进入攻击范
 ## 关键约定
 
 - **`chaseTarget()` 先校验 `navMeshAgent.isOnNavMesh`** 再 `SetDestination`——刚启用代理/未烘焙区会抛 "not close enough to the NavMesh"/"active agent"。
-- **受击 `Hurt(bullet, damageMultiplier=1)`**：Hit 动画触发（`animator.SetTrigger(hitHash)`）+ 减速动画（`MoveSpeed` 0.5×，0.5s 协程恢复）→ 喷血/滴血特效（走 `EffectPool`，喷血按子弹方向 `LookRotation(-bulletDir)`）→ 扣 `bullet.damage * multiplier` → 更新血条。
+- **受击 `Hurt(bullet, damageMultiplier=1)`**：Hit 动画触发（`animator.SetTrigger(hitHash)`）+ 减速动画（`MoveSpeed` 0.5×，0.5s 协程恢复）→ 喷血/滴血特效（走 `EffectPool`，喷血按子弹方向 `LookRotation(-bulletDir)`）→ 扣 `bullet.damage * multiplier` → 更新血条。**当前为绿色血**（`Green/Blood_Smash_Small_Green` + `Green/Blood_Dripping_Green`，2026-08-19 由 `EnemyBloodGreenWizard` 换色，Red/RedBright/RedDark/Blue/Lava/Black 全套可用）。**血花停在命中点**（08-19）：`PlayerWeaponBullet.CheckCollision` 调用 Hurt 前把子弹位置锚定到 `hit.point`；且 `Green/Blood_Smash_Small_Green` 的 Droplets 子发射器已调低重力(1→0.2)/初速(4~6→2，`BloodSmashLocalizeWizard`)，不再掉落地面与滴血混叠。**滴血只留血滩**（08-19）：`Green/Blood_Dripping_Green` 血滩生成链 = DropletsWithBloodMarks（碰撞地面）→Cone→BloodMarks（sub-emitter，properties=0 不继承颜色）；Cone / DropletsWithBloodMarks 粒子已透明化（隐藏血面喷血），Droplets / DropletsWithBloodMarks 已改一次性(1s)+初速减半（6~15→3~7.5，不再持续滴血），BloodMarks 血滩保留（`BloodDripCleanWizard`）。
 - **死亡**：`SwitchState(Dead)` + 禁用 NavMeshAgent + `bodyCollider.enabled=false`（**null 防御**，兼容无 BoxCollider 的敌人）+ 销毁血条 → `ZombieDeadState` 播完 `Clear()`（`stateMachine.Stop()` + `Destroy`）。
 - **血条**：`Start` 实例化到 `UIManager.INSTANCE.WorldSpaceCanvas`，受击后显示 `healthBarShowTime=6s`，Billboard 面向相机（`EnemyHealthBarUI`）。
 - **扩展新敌人**：继承 `EnemyBase` 只需实现 `SwitchState(EnemyState)`；状态类继承 `EnemyStateBase`（`Init` 时缓存 `enemyModel` = owner 强转）。动画统一 `PlayStateAnimation(name, transition)`（CrossFadeInFixedTime）。

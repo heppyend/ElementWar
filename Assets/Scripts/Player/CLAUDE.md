@@ -8,7 +8,8 @@
 |------|------|
 | `PlayerController.cs` | 单例（`SingleMonoBase<PlayerController>`）：轮询输入 → `moveInput/isSprint/isAiming/isJumping/isFire/isSlide`；相机相对方向 `worldMovement/localMovement`；双相机切换 `EnterAim/ExitAim`；IK 权重；角色切换 `SwitchPlayerModel(0/1/2)`；死亡接管 `OnPlayerDied`；`ShakeCamera()` |
 | `PlayerModel.cs` | `IStateMachineOwner`：CharacterController + Animator + StateMechaine；血量/受击/死亡；人机跟随；FPS 式移动参数；IK 约束引用（Hunter 为 null） |
-| `PlayerWeapon.cs` | 武器：`Fire(targetPos)` 射速限制 `bulletInterval=0.15s`（≈6.67 发/秒）；子弹走 Queue 对象池 + 枪口火花走 `EffectPool`（**仅荧/芙宁娜挂载**，Hunter 无武器） |
+| `PlayerWeapon.cs` | 武器：`Fire(targetPos)` 射速限制 `bulletInterval=0.15s`（≈6.67 发/秒）；子弹走 Queue 对象池 + 枪口火花走 `EffectPool`；成功发射一枪广播 `Fired` 事件（音效组件订阅）。**仅荧/芙宁娜挂载**，Hunter 无武器 |
+| `WeaponAudio.cs` | 武器音效（**可替换组件**）：订阅 `PlayerWeapon.Fired` 播枪声；`fireClips` 数组在 Inspector 里自由替换/增删即换枪声；随机抽 1 个 + 随机音高避免重复感；AudioSource 3D 声场（随距离衰减）。**仅荧/芙宁娜挂载**，Hunter 无武器 |
 | `PlayerWeaponBullet.cs` | 子弹：Rigidbody 飞行（`flyPower=30`）+ 帧间 Raycast 防穿透；命中播特效回池；命中 Enemy Tag 调 `Hurt()`（damage=10） |
 | `State/` | 玩家状态实现：`PlayerIdleState` / `PlayerMoveState` / `PlayerHoverState` / `PlayerAimingState` / `PlayerSlideState` / `PlayerSprintState` |
 

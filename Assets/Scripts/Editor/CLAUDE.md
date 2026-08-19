@@ -12,6 +12,10 @@
 | `Tools/场景/把选中物体落到地面（吸附到表面）` | `SnapToFloorWizard` | 批量把选中物体底面吸附到下方表面（换地板后 cube 悬空用；需地面有 Collider） |
 | `Tools/场景/给选中物体添加 NavMeshObstacle` / `移除...` | `NavMeshObstacleWizard` | 墙/柱子阻挡寻路（carving 动态避障，不用重烘焙） |
 | `Tools/场景/把选中物体烘焙为可行走并重烘焙` | `BakeWalkableWizard` | 斜坡/楼梯/平台设为可行走面并重烘焙 |
+| `Tools/玩家/给两把枪挂载音效组件（M4 / AK）` | `WeaponAudioWizard` | 给 荧(Weapon_Lumine / M4A1) 和 芙宁娜(Weapon-Furina / AK47) 的武器补挂 `WeaponAudio`+`AudioSource` 并写入 fireClips（幂等可重跑；以后换枪声直接在 Inspector 换 fireClips，不用再跑）。**同时处理 prefab 资产 + 活动场景**（Game 已 Unpack，改 prefab 不同步，必须补挂场景对象） |
+| `Tools/玩家/敌人喷血特效换绿色（受击+滴血）` | `EnemyBloodGreenWizard` | 把敌人（丘丘人）的 `bloodSmashPrefab`/`bloodDrippingPrefab` 从 Red 换成 Green（`Effects/Hurts/prefab/Green/`）。**同时处理 prefab + 场景所有 ZombieEnemy**。换其它颜色改 Red/Green 常量即可（有 Red/RedBright/RedDark/Blue/Lava/Black 全套） |
+| `Tools/玩家/受击血花停在命中点（减小重力+喷射）` | `BloodSmashLocalizeWizard` | 改 `Green/Blood_Smash_Small_Green.prefab` 的 Droplets 子发射器：重力 1→0.2、初速 4~6→2，血花停在命中点不落地（场景通过 GUID 引用同一资产，改 prefab 即生效）。配合 `PlayerWeaponBullet.CheckCollision` 把子弹位置锚定到 `hit.point` 使用 |
+| `Tools/玩家/滴血特效只留血滩（去掉血面喷血）` | `BloodDripCleanWizard` | 改 `Green/Blood_Dripping_Green.prefab`：Cone / DropletsWithBloodMarks **粒子透明化**（隐藏血面喷血/漂浮血块，保留发射+碰撞→血滩链）；Droplets / DropletsWithBloodMarks 改**一次性(1s)+初速减半**（不再持续滴血）；BloodMarks 血滩保留。血滩生成链：DropletsWithBloodMarks 碰撞地面→Cone→BloodMarks |
 | `Tools/配置 Running Slide 动画 (Humanoid)` | `SetupRunningSlide` | 滑铲动画配置 |
 | 自动（`AssetPostprocessor`） | `RedWolfRoseFBXFixer` | FBX 导入后把内嵌材质自动换 `URP/Lit` + 重链贴图（红狼_玫瑰用） |
 

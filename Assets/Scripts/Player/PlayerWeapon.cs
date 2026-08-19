@@ -1,3 +1,4 @@
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
@@ -7,6 +8,11 @@ using UnityEngine;
 /// </summary>
 public class PlayerWeapon : MonoBehaviour
 {
+    /// <summary>
+    /// 开火事件（每次成功发射一枪触发；音效等挂载组件订阅，如 WeaponAudio）
+    /// </summary>
+    public event Action Fired;
+
     [Tooltip("子弹生成的位置")]
     public Transform bulletSpawnPoint;
     [Tooltip("子弹预制体")]
@@ -31,6 +37,7 @@ public class PlayerWeapon : MonoBehaviour
             return;
         }
         lastFireTime = Time.time;
+        Fired?.Invoke();//广播开火（音效组件订阅）
         //计算发射方向
         Vector3 direction = targetPos - bulletSpawnPoint.position;
         direction.Normalize();
