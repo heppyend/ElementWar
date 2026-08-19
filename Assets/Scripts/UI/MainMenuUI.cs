@@ -26,10 +26,10 @@ public class MainMenuUI : UIBase<MainMenuUI>
     protected override void Awake()
     {
         base.Awake();
-        btnOnline.onClick.AddListener(showTipMenu);
+        btnOnline.onClick.AddListener(() => ElementWar.Net.PVPLobbyUI.Show());
         btnContinue.onClick.AddListener(showTipMenu);
         btnNewGame.onClick.AddListener(() => {
-            SceneManager.LoadScene("Game");
+            SceneManager.LoadScene("PVEGame");
         });
         btnRead.onClick.AddListener(showTipMenu);
         btnCharacter.onClick.AddListener(showTipMenu);

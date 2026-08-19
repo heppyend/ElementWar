@@ -47,6 +47,13 @@ Backup_*/
 _Diagnostics_*.log
 _Diagnostics_*.txt
 
+# ============ PVP .NET 服务器（Server/，08-19 加入）============
+# 源代码与工程文件必须提交（否则新机器 dotnet run 起不来）；bin/obj 编译产物忽略
+Server/bin/
+Server/obj/
+!Server/ElementWarServer.csproj
+!Server/ElementWarServer.sln
+
 # ============ 新资源包（08-17 加入，后续可能用；体积大不提交，只留磁盘）============
 # CombatGirlsCharacterPack：忽略全部内容，仅放行 CLAUDE.md（包说明入库）
 Assets/CombatGirlsCharacterPack/*

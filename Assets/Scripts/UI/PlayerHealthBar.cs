@@ -10,6 +10,8 @@ public class PlayerHealthBar : MonoBehaviour
     private PlayerModel owner;//所属角色
     private GameObject healthBarInstance;//实例化后的血条
     private EnemyHealthBarUI healthBarUI;//实例上的血条逻辑组件
+    [Tooltip("常显血条（PVP 远端玩家用，PVE 主控仍按当前控制角色显示）")]
+    public bool alwaysShowHealthBar;
 
     private void Awake()
     {
@@ -25,9 +27,10 @@ public class PlayerHealthBar : MonoBehaviour
     {
         if (healthBarInstance == null) return;
 
-        // 仅当前被控制的角色显示血条（切换角色后自动切换显示）
-        bool isControlled = owner != null && PlayerController.INSTANCE != null
-                            && PlayerController.INSTANCE.currentPlayerModel == owner;
+        // 显示条件：常显（PVP 远端）或 当前被控制的角色（PVE 主控）
+        bool isControlled = alwaysShowHealthBar
+                            || (owner != null && PlayerController.INSTANCE != null
+                                && PlayerController.INSTANCE.currentPlayerModel == owner);
         if (healthBarInstance.activeSelf != isControlled)
             healthBarInstance.SetActive(isControlled);
 

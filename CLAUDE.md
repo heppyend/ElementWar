@@ -43,6 +43,7 @@ There is no CI/CD or headless build pipeline configured.
 > - [`Assets/Scripts/Enemy/CLAUDE.md`](Assets/Scripts/Enemy/CLAUDE.md) — 敌人系统：追击 / 攻击闭环 / 受击 / 死亡
 > - [`Assets/Scripts/Editor/CLAUDE.md`](Assets/Scripts/Editor/CLAUDE.md) — 编辑器向导：Tools/玩家 + Tools/场景 铁律
 > - [`Assets/Scripts/FPS/CLAUDE.md`](Assets/Scripts/FPS/CLAUDE.md) — FPS 原型框架（New Scene 沙盒）
+> - [`Assets/Scripts/Network/CLAUDE.md`](Assets/Scripts/Network/CLAUDE.md) — PVP 网络同步：UDP 权威框架 / 简化移动 / 服务器 Server/（.NET）
 > - [`Assets/Resource/Models/CLAUDE.md`](Assets/Resource/Models/CLAUDE.md) — 模型导入：MMD/URP/Blender 手册
 
 > 模块级细节见上；以下是全局架构摘要：
@@ -237,6 +238,14 @@ Aiming is checked in `PlayerStateBase.Update()` every frame — when `isAiming` 
 - **场景修改必经编辑器向导**：`Game.unity` 是**二进制场景**，无法文本编辑；改场景（换控制器/修约束/重烘焙）一律走 `Assets/Scripts/Editor/*Wizard.cs`。⚠️ **2026-08-17 起 Game 场景已全部 `UnpackPrefabInstance`（`Tools/场景/解开全部预制体`）**——场景对象已非 prefab 实例，可直接 `SetParent`/自由编辑、无需 `RecordPrefabInstancePropertyModifications`；「prefab 实例内不能 SetParent」的限制仅剩 prefab 资产编辑时适用。代价：改场景不再同步回 prefab 资产；按 prefab 路径识别对象的旧工具已随之删除（08-17 清理）。
 - **Bullet**: Rigidbody 飞行（`flyPower=30`）+ 帧间 Raycast 防穿透 + Queue 对象池；命中播特效回池、命中 `Enemy` Tag 调用 `Hurt()`（damage=10）。枪口火花/命中特效/敌人受击特效统一走 `EffectPool`（按预制体分池，粒子播完自动回池）。
 - **NavMesh 出问题（走上天/走不过来/not close enough）**：⚠️ 先查是否 `NavMeshModifier(ignoreFromBuild)` 误标了地面——08-17 事故：旧「标记可能走上天」工具用「顶部离地>2.5m 或浮空>2m」启发式，把 1000×1000 的 Ground 也判成浮空排除 → **0 三角面 → 所有代理 not close enough**。修复跑 `Tools/玩家/修复 NavMesh 排除标记并校正地面（重烘焙）`（移除 ignoreFromBuild + 抬地面 + 清空重建 + 角色吸附，写日志）；排查跑 `Tools/玩家/诊断 NavMesh 层配置（写日志文件）`。旧 `RebakeNavMeshWizard` 已删（其「标记走上天」启发式误伤地面）。注意：层 6 = Environment；`PlayerModel.cc` 运行时才赋值、**编辑模式为 null**（向导别用它算脚底）。
+
+## PVP 网络同步（2026-08-19 新增）
+
+- **架构**：自定义 UDP 权威框架（参考 CalabiYau，非移植）。服务器是独立 .NET UDP 进程（`Server/`，`dotnet run`），客户端只上报输入和开火意图，服务器 30Hz 权威模拟位置/血量/命中/死亡重生/计分，按客户端全量快照，客户端本地预测 + 误差校正 + 远端插值。
+- **简化移动**：C# 服务器跑不了 CharacterController → PVP 用 `PvPMotor`（客户端）与 `GameWorld.SimulatePlayer`（服务器）同一简化数学（无墙碰撞，掩体纯视觉）。PVE 的 CharacterController/状态机完全不动。
+- **PVP 屏蔽 AI 队友**：每客户端只控 1 角色（荧/芙宁娜），`PlayerModel.disableStateMachine=true` + NavMeshAgent 禁用，位移由 PvPMotor 驱动 transform。
+- **入口**：主菜单「在线」→ PVPLobbyUI（IP/角色选择）→ 加载 `PVPGame` 场景（`Tools/玩家/搭建 PVP 场景` 一键搭）。双人测试：服务器 `dotnet run` + 2 个 Unity 客户端实例连 127.0.0.1:7777。
+- 细节、协议、两端 DTO 对齐见 `Assets/Scripts/Network/CLAUDE.md` 与 `Server/`。
 
 ## Known Issues / TODO
 

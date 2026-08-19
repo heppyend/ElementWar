@@ -49,8 +49,12 @@ public class WeaponAudio : MonoBehaviour
         if (weapon != null) weapon.Fired -= OnFired;
     }
 
-    private void OnFired()
+    private void OnFired() => NotifyFired();
+
+    /// <summary>外部通知开火（PVP 网络开火视觉用，直接播枪声；PVE 由 PlayerWeapon.Fired 触发）。</summary>
+    public void NotifyFired()
     {
+        if (audioSource == null) return;
         AudioClip clip = PickRandom(fireClips);
         if (clip == null) return;
         audioSource.pitch = Random.Range(pitchMin, pitchMax);

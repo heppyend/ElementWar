@@ -70,6 +70,9 @@ public class PlayerModel : MonoBehaviour,IStateMachineOwner
     [Tooltip("跳跃是否在 Hunter_Parkour 控制器的 3 个跑酷跳跃片段（jmp_base_B / jmp_Move_left / jmp_BackAir）中随机选 1 个播放。\n" +
              "仅 Hunter 启用，其他角色为 false 不受影响")]
     public bool randomJumpClips = false;
+    [Tooltip("禁用状态机与 CharacterController 位移（PVP 网络玩家用）：由 PvPMotor 驱动 transform.position 和 Animator，\n" +
+             "服务器与客户端使用同一简化移动模型。PVE 为 false 不受影响")]
+    public bool disableStateMachine = false;
     [Tooltip("行走速度")]
     public float walkSpeed = 2.2f;
     [Tooltip("移动(慢跑)速度")]
@@ -160,9 +163,12 @@ public class PlayerModel : MonoBehaviour,IStateMachineOwner
     }
     void Start()
     {
-        // angularSpeed 依赖 PlayerController.INSTANCE，延迟到 Start 赋值（此时所有 Awake 已执行完毕）
-        navMeshAgent.angularSpeed = PlayerController.INSTANCE.rotationSpeed;
-        SwitchState(PlayerState.Idle);
+        // angularSpeed 依赖 PlayerController.INSTANCE，延迟到 Start 赋值（此时所有 Awake 已执行完毕）；PVP 场景无 PlayerController，判空兜底
+        if (PlayerController.INSTANCE != null)
+            navMeshAgent.angularSpeed = PlayerController.INSTANCE.rotationSpeed;
+        // PVP 网络玩家（disableStateMachine）：状态机/位移由 PvPMotor 接管，跳过状态机启动
+        if (!disableStateMachine)
+            SwitchState(PlayerState.Idle);
         ExitAim();
     }
 
@@ -178,6 +184,8 @@ public class PlayerModel : MonoBehaviour,IStateMachineOwner
         // 用 LateUpdate 而非 Update：确保状态类（经 MonoManager 集中式 Update，通常早于本帧）
         // 先写入 horizontalVelocity，本 LateUpdate 再 Move——避免"先移动后写值"导致位移被吞。
         if (!useFPSMovement || cc == null || isDead) return;
+        // PVP 网络玩家：位移由 PvPMotor 驱动 transform，CC 位移完全关闭
+        if (disableStateMachine) return;
         // 人机（非主控）：位移由 NavMeshAgent 全权驱动，不调用 cc.Move——
         // 否则 CharacterController 每帧改 transform 与 NavMeshAgent 抢位置，寻路被干扰导致原地不动
         if (PlayerController.INSTANCE == null || PlayerController.INSTANCE.currentPlayerModel != this) return;
@@ -263,6 +271,26 @@ public class PlayerModel : MonoBehaviour,IStateMachineOwner
     }
 
 
+
+    /// <summary>PVP 网络死亡（disableStateMachine 模式下由 NetClient 调用）：置死 + 播死亡动画。</summary>
+    public void ApplyDeathNetwork()
+    {
+        if (isDead) return;
+        isDead = true;
+        if (cc != null) cc.enabled = false;
+        if (!string.IsNullOrEmpty(deadAnimationName))
+            PlayStateAnimation(deadAnimationName, 0.1f);
+    }
+
+    /// <summary>PVP 网络重生（disableStateMachine 模式下由 NetClient 调用）：复位血/位置/CC。</summary>
+    public void ApplyRespawnNetwork(Vector3 pos, int health, int maxHealthValue)
+    {
+        isDead = false;
+        currentHealth = health;
+        maxHealth = maxHealthValue;
+        transform.position = pos;
+        if (cc != null) cc.enabled = true;
+    }
 
     /// <summary>
     /// 切换状态
@@ -376,6 +404,7 @@ public class PlayerModel : MonoBehaviour,IStateMachineOwner
 
     private void OnAnimatorMove()
     {
+        if (disableStateMachine) return;//PVP 网络玩家：根运动完全丢弃，位移由 PvPMotor 驱动
         if (useFPSMovement) return;//FPS 式移动：拦截并丢弃根运动（applyRootMotion=true 时本回调每帧触发，根运动不应用，位移仍由 LateUpdate 的 cc.Move 驱动）
         if (animator == null) return;
         if (isDead) return;//死亡后不再移动（死亡动画仍由 Animator 播放）
