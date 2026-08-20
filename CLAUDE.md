@@ -94,6 +94,7 @@ Enemy States: Idle → Move → Attack → Dead（攻击闭环已实现：进范
 PlayerWeapon : MonoBehaviour
   → Fire(targetPos) — rate-limited by bulletInterval (0.15s ≈ 6.67 发/秒)；成功发射广播 Fired 事件
   → 子弹走 Queue 对象池 + 枪口火花走 EffectPool（不再 Instantiate/Destroy）
+  → 08-20：开火附「子弹轨迹（短命 LineRenderer 曳光）+ 击中墙体弹孔（程序化贴花，角色身上不贴）」——`SpawnTracerAndHole` 沿枪口射线定终点，纯视觉
 
 WeaponAudio : MonoBehaviour（可替换音效组件，挂在 PlayerWeapon 同物体）
   → 订阅 PlayerWeapon.Fired 播枪声；fireClips 数组在 Inspector 里自由替换/增删即换枪声
@@ -179,7 +180,7 @@ Aiming is checked in `PlayerStateBase.Update()` every frame — when `isAiming` 
 | Enemy system | `Assets/Scripts/Enemy/` |
 | Enemy states | `Assets/Scripts/Enemy/State/` |
 | FPS 原型框架（New Scene） | `Assets/Scripts/FPS/`（Core/Controller/State/Aim/Editor） |
-| 运行时诊断工具 | `Assets/Scripts/Diagnostics/`（GroundDiag / FollowerDiag） |
+| 运行时诊断工具 | `Assets/Scripts/Diagnostics/`（GroundDiag / FollowerDiag / **DebugInfoWindow** 左上角 FPS 信息窗，F3 开关） |
 | 编辑器向导（Tools/玩家） | `Assets/Scripts/Editor/`（一键生成/修复，场景二进制改动必经之路） |
 | Input actions asset | `Assets/Settings/InputSystem/MyInputSystem.inputactions` |
 | Auto-generated input C# | `Assets/Settings/InputSystem/MyInputSystem.cs` (do not hand-edit) |

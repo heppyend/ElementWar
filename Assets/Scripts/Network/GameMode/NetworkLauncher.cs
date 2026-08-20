@@ -1,4 +1,5 @@
 using UnityEngine;
+using ElementWar;
 using ElementWar.Net;
 
 /// <summary>
@@ -20,6 +21,10 @@ public class NetworkLauncher : MonoBehaviour
         // 确保 PVE 式双 FreeLook 相机存在（运行时自建，清理旧 PVPCameraFollow）
         if (FindObjectOfType<PVPCameraRig>() == null)
             new GameObject("PVPCameraRig").AddComponent<PVPCameraRig>();
+
+        // 左上角运行时信息窗（FPS 等，F3 开关，跨场景常驻）
+        if (FindObjectOfType<DebugInfoWindow>() == null)
+            new GameObject("DebugInfoWindow").AddComponent<DebugInfoWindow>();
 
         netClient.spawner = spawner;
         netClient.Configure(

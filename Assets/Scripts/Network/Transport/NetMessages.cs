@@ -87,6 +87,7 @@ namespace ElementWar.Net
         public int lifeStateVersion;
         public float respawnRemainingSeconds;
         public int characterId;
+        public bool isBot;
         public int moveState;
         public float speedBlend;
         public float verticalSpeed;

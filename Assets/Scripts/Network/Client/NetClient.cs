@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Animations.Rigging;
 using UnityEngine.SceneManagement;
 
 namespace ElementWar.Net
@@ -52,6 +53,7 @@ namespace ElementWar.Net
         private readonly HashSet<long> _recentEventIds = new();
         private readonly Dictionary<int, Vector3> _predictionHistory = new(); // inputTick → 预测位置
         private Vector3 _lastReconcilePos;
+        private Transform _localAimTarget;   // PVP 瞄准 IK 目标（预制体约束源是空的，运行时补一个接准心）
 
         // 输入采样（每帧更新，供 PvPMotor 与上报共用）
         private Vector2 _moveInput;
@@ -67,6 +69,8 @@ namespace ElementWar.Net
 
         /// <summary>计分板：playerId → score（由快照更新，PVPHealthUI 读取）。</summary>
         public readonly Dictionary<int, int> Scores = new();
+        /// <summary>机器人玩家 id 集合（由快照 isBot 维护，HUD 显示用）。</summary>
+        public readonly HashSet<int> BotIds = new();
         /// <summary>本地玩家死亡（UI 弹重生提示）。</summary>
         public event Action OnLocalDied;
         /// <summary>对局结束（UI 弹结束面板），参数为胜者 playerId。</summary>
@@ -76,6 +80,9 @@ namespace ElementWar.Net
         {
             _input = new MyInputSystem();
             _mainCamera = Camera.main;
+            // 兜底：确保左上角信息窗存在（NetworkLauncher 可能因组件缺失提前 return 没创建）
+            if (FindObjectOfType<DebugInfoWindow>() == null)
+                new GameObject("DebugInfoWindow").AddComponent<DebugInfoWindow>();
         }
 
         private void OnEnable() { _input.Enable(); }
@@ -119,6 +126,7 @@ namespace ElementWar.Net
 
             SampleInput();
             if (_localMotor != null) PushInputToMotor();
+            if (_localAimTarget != null) _localAimTarget.position = _aimPoint; // 瞄准 IK 目标跟准心
 
             // 按 30Hz 上报输入
             // ⚠️ 不做跳跃/滑铲即时上报：即时上报每次多 +1 inputTick → 玩一阵就漂移超前>30 被服务器拒收 → 回弹/抖动。
@@ -353,6 +361,7 @@ namespace ElementWar.Net
                     // PVP 无 AI 随从：禁用 NavMeshAgent，避免与 PvPMotor 抢位移
                     if (_localModel.navMeshAgent != null) _localModel.navMeshAgent.enabled = false;
                 }
+                WireLocalAimTarget(); // PVP 瞄准 IK：约束源空 → 补运行时 AimTarget 接准心
             }
 
             // 相机由 PVPCameraRig 自动跟随 LocalModel，无需在此绑定
@@ -361,15 +370,66 @@ namespace ElementWar.Net
             Debug.Log($"[NetClient] 已连接 playerId={_playerId} tickRate={_serverTickRate}");
         }
 
+        /// <summary>
+        /// PVP 瞄准 IK 接线：预制体里 MultiAimConstraint 的源对象是空的（fileID:0），
+        /// 又没有 PlayerController 更新 AimTarget → 枪不指向准心、IK 不跟随。
+        /// 这里补一个运行时 AimTarget 子物体接进约束，之后每帧把它的位置设成准心射线点。
+        /// </summary>
+        private void WireLocalAimTarget()
+        {
+            if (_localModel == null) return;
+            // ⚠️ Animation Rigging 约束在 applyRootMotion=false 时【根本不求值】（Unity 已知问题）。
+            // PVP 预制体 useFPSMovement=false → PlayerModel.Awake 不会强制开，必须这里补上；
+            // 根运动由 PlayerModel.OnAnimatorMove（disableStateMachine 分支）丢弃，不影响 PvPMotor 位移。
+            if (_localModel.animator != null)
+                _localModel.animator.applyRootMotion = true;
+
+            var aims = _localModel.GetComponentsInChildren<MultiAimConstraint>(true);
+            if (aims.Length == 0)
+            {
+                Debug.LogWarning("[NetClient] PVP 瞄准 IK：未找到 MultiAim 约束（枪无法指向准心）");
+                return;
+            }
+
+            var aimGo = new GameObject("AimTarget_PVP");
+            aimGo.transform.SetParent(_localModel.transform, false);
+            aimGo.transform.localPosition = new Vector3(0f, 1.5f, 5f);
+            _localAimTarget = aimGo.transform;
+
+            foreach (var c in aims)
+            {
+                // ⚠️ 08-21 根因修复：sourceObjects 是 WeightedTransformArray【结构体】，get 属性每次返回副本，
+                //    直接 `d.sourceObjects.SetTransform(0, t)` 改的是临时副本 → 真实 m_SourceObjects 从没变（诊断 src0=EMPTY_REF）。
+                //    必须：读副本 → 改副本 → 经 setter 写回（d 是 ref 到 m_Data，写回才落在真实数据上）。
+                ref var d = ref c.data;
+                var sources = d.sourceObjects;
+                sources.SetTransform(0, _localAimTarget);
+                d.sourceObjects = sources;
+            }
+            // 约束数据改动后重建 Rig，否则新源对象不生效
+            var rig = _localModel.GetComponentInChildren<RigBuilder>(true);
+            if (rig != null) { rig.Clear(); rig.Build(); }
+            // 默认髋部持枪：预制体里 MultiAim m_Weight=1（激活状态），接线后若不重置，
+            // 不瞄准时枪也会被 IK 拽着指向 AimTarget。瞄准切换由 PvPMotor 管理。
+            foreach (var c in aims) c.weight = 0f;
+            var hip = _localModel.GetComponentInChildren<TwoBoneIKConstraint>(true);
+            if (hip != null) hip.weight = 1f;
+            Debug.Log($"[NetClient] 已接线 PVP 瞄准 IK（{aims.Length} 个 MultiAim → AimTarget_PVP，默认髋部持枪）");
+        }
+
         private void HandleSnapshot(WorldSnapshotMessage snap)
         {
             _lastServerTick = snap.serverTick; // 更新对齐基线（inputTick 用）
             // RTT 粗估：以快照 serverTick 与我们本地 tick 对齐来推（简化：固定值）
             // 自己的状态 → 预测校正
+            var alive = new HashSet<int>(); // 本快照在场玩家（修剪 Scores/BotIds 用）
             for (int i = 0; i < snap.players.Length; i++)
             {
                 var ps = snap.players[i];
+                alive.Add(ps.playerId);
                 Scores[ps.playerId] = ps.score; // 计分板
+                if (ps.isBot) BotIds.Add(ps.playerId);
+                else BotIds.Remove(ps.playerId);
                 if (ps.playerId == _playerId)
                 {
                     ReconcileLocal(ps);
@@ -387,6 +447,12 @@ namespace ElementWar.Net
                     }
                 }
             }
+
+            // 修剪：本快照不存在的玩家从计分板/BotIds 移除（bot 被移除、对手离开后不留残项）
+            var stale = new List<int>();
+            foreach (var id in Scores.Keys)
+                if (!alive.Contains(id)) stale.Add(id);
+            foreach (var id in stale) { Scores.Remove(id); BotIds.Remove(id); }
 
             // 销毁不在复制范围的远端
             var replicated = new HashSet<int>(snap.replicatedPlayerIds);
@@ -411,7 +477,7 @@ namespace ElementWar.Net
 
             var go = new GameObject($"RemoteAvatar_{ps.playerId}");
             var av = go.AddComponent<RemoteAvatar>();
-            av.Setup(ps.playerId, prefab, new Vector3(ps.x, ps.y, ps.z), ps.bodyYawDeg);
+            av.Setup(ps.playerId, prefab, new Vector3(ps.x, ps.y, ps.z), ps.bodyYawDeg, _serverTickRate);
             _remotes[ps.playerId] = av;
             return av;
         }

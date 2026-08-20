@@ -3,14 +3,15 @@ using ElementWar.Server;
 // ============================================================
 // ElementWar PVP 权威服务器（.NET UDP，参考 CalabiYau 架构）
 // 运行：cd Server && dotnet run
-// 可选参数：--port 7777 --tickrate 30
+// 可选参数：--port 7777 --tickrate 60（默认 60Hz；GameWorldSettings.ServerTickRate 必须与之一致）
 // ============================================================
 
 var options = new UdpGameServerOptions
 {
     ListenPort = ParseArg("--port", 7777),
-    TickRate = ParseArg("--tickrate", 30),
+    TickRate = ParseArg("--tickrate", 60),
 };
+options.WorldSettings.EnableBots = ParseFlag("--bots");   // 默认关：单人纯测试不被 bot 秒杀；`--bots` 开训练模式
 
 using var shutdown = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) =>
@@ -39,4 +40,10 @@ static int ParseArg(string key, int fallback)
             return v;
     }
     return fallback;
+}
+
+static bool ParseFlag(string key)
+{
+    string[] args = Environment.GetCommandLineArgs();
+    return Array.IndexOf(args, key) >= 0;
 }

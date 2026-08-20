@@ -55,10 +55,16 @@ namespace ElementWar.Net
             _healthFill.fillAmount = ratio;
             _healthText.text = $"{_net.LocalModel.currentHealth}/{_net.LocalModel.maxHealth}";
 
-            // 计分板
+            // 计分板（bot 用负数 id，显示「Bot」；训练模式=有机器人在场）
             var sb = new System.Text.StringBuilder();
+            sb.AppendLine(_net.BotIds.Count > 0 ? "训练模式（机器人）" : "对战");
             foreach (var kv in _net.Scores)
-                sb.AppendLine($"P{kv.Key}: {kv.Value} 分");
+            {
+                string who = kv.Key == _net.PlayerId ? "你"
+                    : _net.BotIds.Contains(kv.Key) ? "Bot"
+                    : $"P{kv.Key}";
+                sb.AppendLine($"{who}: {kv.Value} 分");
+            }
             _scoreboardText.text = sb.ToString();
 
             // 死亡重生提示：轮询 isDead
@@ -118,10 +124,17 @@ namespace ElementWar.Net
         private void ShowMatchEnd(int winnerId)
         {
             bool win = winnerId == _net.PlayerId;
-            _endTitle.text = win ? "你获胜！" : $"P{winnerId} 获胜";
+            _endTitle.text = win ? "你获胜！"
+                : _net.BotIds.Contains(winnerId) ? "Bot 获胜"
+                : $"P{winnerId} 获胜";
             var sb = new System.Text.StringBuilder();
             foreach (var kv in _net.Scores)
-                sb.AppendLine($"P{kv.Key}: {kv.Value} 分");
+            {
+                string who = kv.Key == _net.PlayerId ? "你"
+                    : _net.BotIds.Contains(kv.Key) ? "Bot"
+                    : $"P{kv.Key}";
+                sb.AppendLine($"{who}: {kv.Value} 分");
+            }
             _endScores.text = sb.ToString();
             _endPanel.gameObject.SetActive(true);
             Time.timeScale = 0f; // 暂停

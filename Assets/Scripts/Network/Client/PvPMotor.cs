@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.Animations.Rigging;
 
 namespace ElementWar.Net
 {
@@ -38,6 +39,9 @@ namespace ElementWar.Net
         private Animator _animator;
         private float _verticalSpeed;
         private bool _isGrounded = true;
+        private MultiAimConstraint[] _aimConstraints;   // 缓存：枪指准心 IK（PVP 无 PlayerController，需自行管理）
+        private TwoBoneIKConstraint _hipIK;            // 缓存：髋部握枪 IK
+        private float _aimIKWeight;                    // 当前瞄准 IK 权重（平滑过渡）
         private float _speedBlend;
         private int _animState = -1;   // 0=Idle 1=Move 2=Aiming 3=Hover 4=RunningSlide
         private float _groundY = GroundY;   // 每角色脚底偏移（Awake 按 CC 精确算）
@@ -66,6 +70,8 @@ namespace ElementWar.Net
             bodyYawDeg = yawDeg;
             _verticalSpeed = 0f;
             _isGrounded = true;
+            _isSliding = false;   // 重生复位：避免死亡时正在滑铲，重生后残留继续滑（服务器 Respawn 同步复位）
+            _slideTimer = 0f;
         }
 
         public void ApplyState(Vector3 pos, float yawDeg, float verticalSpeed, bool grounded)
@@ -79,6 +85,7 @@ namespace ElementWar.Net
         private void Update()
         {
             if (_model == null) return;
+            if (_model.isDead) return; // 死亡冻结：停止位移/动画驱动，让死亡动画完整播放（否则每帧 CrossFade 把死亡动画打断）
             if (_animator == null) _animator = _model.animator; // 懒加载，避免 Awake 顺序问题
 
             float dt = Time.deltaTime;
@@ -99,9 +106,50 @@ namespace ElementWar.Net
             // 速度选择
             Vector3 move = new Vector3(worldMove.x, 0f, worldMove.z);
             float mag = move.magnitude;
-            Vector3 moveDir = mag > 0.01f ? move / mag : Vector3.zero;
+            Vector3 inputDir = mag > 0.01f ? move / mag : Vector3.zero;
             bool moving = mag > 0.01f;
             float speed = moving ? (isSprint ? SprintSpeed : isAiming ? AimMoveSpeed : JogSpeed) : 0f;
+            bool aiming = isAiming || isFire;
+
+            // 朝向先算（滑铲→滑铲方向；瞄准→瞬时面向相机；移动→平滑转向输入方向；待机保持当前朝向）。
+            // ⚠️ 必须比位移先算：非瞄准时位移沿当前朝向走（换向成弧线，面朝=移动方向），
+            //    否则换向/反方向时面朝（720°/s 平滑转向）追不上位移 → 倒车/侧跑 = 对方视角"乱跑"（08-21 诊断 166° 朝向差实证）。
+            // ⚠️ 瞄准必须【瞬时】面向相机（PVE 同款）：用 720°/s 平滑会让手停下来后角色还惯性转到相机朝向
+            //    （最长 0.5s），对方视角看"玩家在移动/打转"（08-21 用户反馈）。
+            if (_isSliding)
+            {
+                float slideYaw = Mathf.Atan2(_slideDirection.x, _slideDirection.z) * Mathf.Rad2Deg;
+                bodyYawDeg = Mathf.MoveTowardsAngle(bodyYawDeg, slideYaw, TurnSpeedDeg * dt);
+            }
+            else if (aiming)
+            {
+                Vector3 camF = Camera.main != null ? Camera.main.transform.forward : Vector3.forward;
+                camF.y = 0f;
+                if (camF.sqrMagnitude > 0.01f)
+                    bodyYawDeg = Mathf.Atan2(camF.x, camF.z) * Mathf.Rad2Deg;
+            }
+            else if (moving)
+            {
+                float targetYaw = Mathf.Atan2(inputDir.x, inputDir.z) * Mathf.Rad2Deg;
+                bodyYawDeg = Mathf.MoveTowardsAngle(bodyYawDeg, targetYaw, TurnSpeedDeg * dt);
+            }
+            // 待机（不瞄准不移动）：保持当前朝向（复刻 PVE，原地转视角不打转）
+            transform.rotation = Quaternion.Euler(0f, bodyYawDeg, 0f);
+
+            // 位移方向：瞄准沿输入（可侧移）；非瞄准沿当前朝向（面朝=移动方向，换向走弧线，不倒车/侧跑）
+            Vector3 moveDir;
+            if (_isSliding)
+            {
+                moveDir = _slideDirection;
+            }
+            else if (aiming)
+            {
+                moveDir = inputDir;
+            }
+            else
+            {
+                moveDir = new Vector3(Mathf.Sin(bodyYawDeg * Mathf.Deg2Rad), 0f, Mathf.Cos(bodyYawDeg * Mathf.Deg2Rad));
+            }
 
             // 水平位移（transform 直接移动）
             Vector3 delta = moveDir * (speed * dt);
@@ -143,27 +191,17 @@ namespace ElementWar.Net
             transform.position = newPos;
             _isGrounded = newPos.y <= _groundY + 0.001f;
 
-            // 朝向（PVE 主视角）：滑铲→朝滑铲方向；瞄准/待机→面向相机方向（永远看背面，视角转角色就跟着转）；移动→面向移动方向。
-            // ⚠️ 不用 aimPoint：屏幕中心射线可能命中自身碰撞体 → 面向相机 → 看到正脸。
-            bool aiming = isAiming || isFire;
-            float targetYaw = bodyYawDeg;
-            if (_isSliding)
+            // 复刻 PVE 瞄准 IK：只有【瞄准/开火】时 MultiAim(枪指准心)=1，平时髋部握枪(TwoBoneIK)。
+            // 每帧严格按状态设权重（缓存引用 + 平滑过渡），消除"移动时枪还指着准心"的状态残留。
+            // （朝向已在位移前算好，见上；不再重复计算 bodyYawDeg/rotation）
+            if (_aimConstraints == null)
             {
-                targetYaw = Mathf.Atan2(_slideDirection.x, _slideDirection.z) * Mathf.Rad2Deg;
+                _aimConstraints = _model.GetComponentsInChildren<MultiAimConstraint>(true);
+                _hipIK = _model.GetComponentInChildren<TwoBoneIKConstraint>(true);
             }
-            else if (aiming || !moving)
-            {
-                Vector3 camF = Camera.main != null ? Camera.main.transform.forward : Vector3.forward;
-                camF.y = 0f;
-                if (camF.sqrMagnitude > 0.01f)
-                    targetYaw = Mathf.Atan2(camF.x, camF.z) * Mathf.Rad2Deg;
-            }
-            else
-            {
-                targetYaw = Mathf.Atan2(moveDir.x, moveDir.z) * Mathf.Rad2Deg;
-            }
-            bodyYawDeg = Mathf.MoveTowardsAngle(bodyYawDeg, targetYaw, TurnSpeedDeg * dt);
-            transform.rotation = Quaternion.Euler(0f, bodyYawDeg, 0f);
+            _aimIKWeight = Mathf.MoveTowards(_aimIKWeight, aiming ? 1f : 0f, 8f * dt);
+            foreach (var c in _aimConstraints) c.weight = _aimIKWeight;
+            if (_hipIK != null) _hipIK.weight = 1f - _aimIKWeight;
 
             // Animator 状态切换：PVE 由状态机 CrossFade 到 Idle/Move/Aiming/Hover，PvPMotor 复刻
             // （只设 Speed 参数不会切出 Idle 状态 → 角色平移不摆腿、射击不进瞄准姿势）

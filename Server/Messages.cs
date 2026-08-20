@@ -97,6 +97,7 @@ public sealed class PlayerSnapshotMessage
     [JsonPropertyName("lifeStateVersion")] public int LifeStateVersion { get; set; }
     [JsonPropertyName("respawnRemainingSeconds")] public float RespawnRemainingSeconds { get; set; }
     [JsonPropertyName("characterId")] public int CharacterId { get; set; }
+    [JsonPropertyName("isBot")] public bool IsBot { get; set; }
     [JsonPropertyName("moveState")] public int MoveState { get; set; }
     [JsonPropertyName("speedBlend")] public float SpeedBlend { get; set; }
     [JsonPropertyName("verticalSpeed")] public float VerticalSpeed { get; set; }

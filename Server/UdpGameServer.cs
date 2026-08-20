@@ -8,7 +8,7 @@ namespace ElementWar.Server;
 public sealed class UdpGameServerOptions
 {
     public int ListenPort = 7777;
-    public int TickRate = 30;
+    public int TickRate = 60;   // 与 GameWorldSettings.ServerTickRate 一致（Program.cs --tickrate 默认 60）
     public GameWorldSettings WorldSettings = new();
     public double ClientTimeoutSeconds = 8;
     public bool LogTelemetry = true;
@@ -48,6 +48,7 @@ public sealed class UdpGameServer : IDisposable
     {
         _options = options;
         _world = new GameWorld(options.WorldSettings);
+        _world.Log = Console.WriteLine; // GameWorld 零 IO，诊断输出交给宿主
         _udp = new UdpClient(options.ListenPort);
         Console.WriteLine($"[ElementWarServer] listening on 0.0.0.0:{options.ListenPort} @ {options.TickRate}Hz");
     }
@@ -119,7 +120,7 @@ public sealed class UdpGameServer : IDisposable
             return;
         }
 
-        if (_world.PlayerCount >= 2)
+        if (_world.HumanCount >= 2)
         {
             Send(from, JsonSerializer.Serialize(new { type = "welcome_full", message = "房间已满（最多 2 人）" }));
             return;
@@ -346,7 +347,7 @@ public sealed class UdpGameServer : IDisposable
 
     private void Telemetry()
     {
-        if (!_options.LogTelemetry || _world.ServerTick % (30 * 5) != 0) return; // 每 5s
+        if (!_options.LogTelemetry || _world.ServerTick % (_options.TickRate * 5) != 0) return; // 每 5s
         Console.WriteLine($"[{NowHHmmss()}] tick={_world.ServerTick} 在线={_clients.Count}/2 " +
                           $"events={_world.PendingReliableEvents.Count} players={string.Join(",", _world.Players.Keys)}");
     }

@@ -28,6 +28,7 @@ public static class SnapshotBuilder
                     ? Math.Max(0f, (p.RespawnServerTick - world.ServerTick) / (float)world.Settings.ServerTickRate)
                     : 0f,
                 CharacterId = p.CharacterId,
+                IsBot = p.IsBot,
                 MoveState = p.MoveState,
                 SpeedBlend = p.SpeedBlend,
                 VerticalSpeed = p.VerticalSpeed,
