@@ -69,9 +69,11 @@ public class PlayerHoverState : PlayerStateBase
         #region 检测角色是否落在地面上
         // 落地用 cc.isGrounded（接触检测）+ IsHover()（距离）双保险：
         // - cc.isGrounded：主检测（接触）
-        // - !IsHover()：兜底（离地 < fallHeight 即视为落地），防水平 cc.Move 刷新 isGrounded 误判
+        // - !IsHover() 兜底（离地 < fallHeight 即视为落地），防水平 cc.Move 刷新 isGrounded 误判
+        // ⚠️ 兜底必须限定在下落段（verticalSpeed <= 0）：起跳后尚未超过 fallHeight 的升空前几帧，
+        //    !IsHover() 会误判"落地"→ 切回 Idle → verticalSpeed 被重置 → 跳不起来（52d271c 引入的回归，08-21 修复）
         // 起飞用 IsHover()（距离检测），落地主用 cc.isGrounded（接触）——不对称保留，但补距离兜底
-        if (playerModel.cc.isGrounded || !playerModel.IsHover())
+        if (playerModel.cc.isGrounded || (playerModel.verticalSpeed <= 0f && !playerModel.IsHover()))
         {
             playerModel.SwitchState(PlayerState.Idle);
         }

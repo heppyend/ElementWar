@@ -34,7 +34,7 @@ Aiming → Idle（松开右键且未开火）
 - **⚠️ `applyRootMotion` 保持 `true`（两套方案都是）**：Animation Rigging 约束（TwoBoneIK/MultiAim）依赖它才求值，`applyRootMotion=false` 时约束根本不工作。FPS 式下根运动由 `OnAnimatorMove` 直接 return 丢弃，位移仍由 cc.Move 驱动，不穿模。
 - **人机位移归 NavMeshAgent 独占**：非主控（`PlayerController.INSTANCE.currentPlayerModel != this`）时 LateUpdate/OnAnimatorMove **都不调 `cc.Move`**——否则 CharacterController 每帧改 transform 与 NavMeshAgent 抢位置，随从原地不动（动画照播）。
 - **`PlayerStateBase.Update` 重力**：用 `if (IsBeControl())` 包裹但**不能 return**（人机 else 分支在 base 之后执行）。稳定性窗口 `HOVER_STABILITY_FRAMES=5` 内 `verticalSpeed` 锁定 `-2f`，超过才累积真实重力。
-- **起飞/落地不对称（有意设计，勿改）**：起飞用 `IsHover()`（SphereCast 从 CC 真实底部 `pos.y + cc.center.y - cc.height*0.5f + cc.skinWidth` 出发，半径 `cc.radius*0.6`）；落地用 `cc.isGrounded`。改回 `!IsHover()` 会破坏落地动画切换。
+- **起飞/落地不对称（有意设计，勿改）**：起飞用 `IsHover()`（SphereCast 从 CC 真实底部 `pos.y + cc.center.y - cc.height*0.5f + cc.skinWidth` 出发，半径 `cc.radius*0.6`）；落地用 `cc.isGrounded`。改回 `!IsHover()` 会破坏落地动画切换。⚠️ **落地兜底 `!IsHover()` 必须限定 `verticalSpeed<=0`（PlayerHoverState）**——52d271c 曾无条件加 `|| !IsHover()`，起跳后未超 fallHeight 的升空前几帧被误判落地 → 垂直速度重置 → 跳不起来（08-21 修复）。
 - **`SwitchToHover()`**：主动跳跃时把 `ungroundedFrameCount = HOVER_STABILITY_FRAMES` 跳过稳定窗口，立即进入重力累积。
 - **滑铲根运动清零**：`OnAnimatorMove` 中 `currentState == PlayerState.Slide` 时 `playerDeltaMovement = Vector3.zero`——Running Slide 动画自带根位移是骨骼侧向（非角色正前方），直接用会"向左滑铲/空中飞踢"。横向位移由 `PlayerSlideState` 自行驱动。
 - **Hunter 例外（2026-08-17 起）**：Hunter **不挂武器**（`weapon==null`）、IK 约束全空。`PlayerModel.EnterAim/ExitAim` 已加 null 保护；`PlayerAimingState` 开火分支有 `weapon != null` 判断（否则 LogWarning）。改瞄准逻辑别假设武器/约束存在。
