@@ -103,10 +103,6 @@ public class PlayerController : SingleMonoBase<PlayerController>
         isSlide = input.Player.IsSlide.triggered;//单击触发一次滑铲（避免长按循环触发）
         #endregion
 
-        // GAME OVER 后最后一名角色已销毁（等死亡动画播完再销毁）：currentPlayerModel 变空引用，
-        // 下方访问 transform 会 NRE，直接返回（输入已读，不影响任何逻辑）
-        if (currentPlayerModel == null) return;
-
         #region 计算玩家移动方向
         //获取相机方向向量
         Vector3 cameraForwardProjection =new Vector3(cameraTransform.forward.x,0,cameraTransform.forward.z).normalized;

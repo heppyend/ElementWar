@@ -253,7 +253,7 @@ Aiming is checked in `PlayerStateBase.Update()` every frame — when `isAiming` 
 
 - [x] **已实现**：敌人 AI（寻路追击/攻击闭环/受击/血条/死亡）、子弹碰撞伤害、空中移动控制、玩家/敌人血量系统、完整死亡流程（随从拦截/主控接管/全灭 GAME OVER）、主菜单 UI、玩家/敌人血条
 - [x] **Hunter 无武器化（2026-08-17）**：移除武器 + 全部 IK 约束（只动 Hunter），瞄准状态/动画保留；还原点已删（Git 接管）
-- [x] ~~玩家 Animator 无 "Dead" clip~~ **死亡动画已接入又临时关闭（2026-08-21）**：`PlayerDeathAnimWizard` 已给 3 个控制器（TPS_Movement / Hunter_Parkour / **Player.controller——PVE 场景 荧/芙宁娜 实际用的旧控制器**）加 4 个死亡状态 `Dead_B/L/F/R`（MotusMan clip，Humanoid 可 retarget，speed=2 + 关 Loop Time）。但 `PlayerModel.Die()` **当前临时不再播死亡动画/不销毁角色**（回退为静态尸体 + GAME OVER，因倒地视觉反复调不好；恢复=在 Die() 里加回 `PlayStateAnimation("Dead_?")` + 销毁协程，git 历史保留全部实现）。⚠️ Hit 受击动画仍未接（`hitAnimationName` 留空，受击靠相机震动兜底）
+- [ ] 玩家 Animator 无 "Hit"/"Dead" clip——受击/死亡动画名默认留空，跳过动画靠相机震动 + 血条归零兜底，死亡有 LogWarning
 - [ ] 无复活流程
 - [ ] `PlayerModel.Update()` 为空——`OnAnimatorMove` 依赖 Animator，Animator 缺失时无兜底
 - [ ] 落地检测维持现状（起飞 `IsHover()` + 落地 `cc.isGrounded` 不对称是**有意设计**，暂不改成 `!IsHover()`）

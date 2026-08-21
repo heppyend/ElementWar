@@ -17,7 +17,6 @@
 | `Tools/玩家/受击血花停在命中点（减小重力+喷射）` | `BloodSmashLocalizeWizard` | 改 `Green/Blood_Smash_Small_Green.prefab` 的 Droplets 子发射器：重力 1→0.2、初速 4~6→2，血花停在命中点不落地（场景通过 GUID 引用同一资产，改 prefab 即生效）。配合 `PlayerWeaponBullet.CheckCollision` 把子弹位置锚定到 `hit.point` 使用 |
 | `Tools/玩家/滴血特效只留血滩（去掉血面喷血）` | `BloodDripCleanWizard` | 改 `Green/Blood_Dripping_Green.prefab`：Cone / DropletsWithBloodMarks **粒子透明化**（隐藏血面喷血/漂浮血块，保留发射+碰撞→血滩链）；Droplets / DropletsWithBloodMarks 改**一次性(1s)+初速减半**（不再持续滴血）；BloodMarks 血滩保留。血滩生成链：DropletsWithBloodMarks 碰撞地面→Cone→BloodMarks |
 | `Tools/玩家/搭建 PVP 场景（PVPGame）` | `BuildPVPSceneWizard` | 一键搭 PVP 竞技场场景（地面/掩体/出生点/相机/PVP 网络组件/Managers/EventSystem，幂等）。PVP 网络详见 `Assets/Scripts/Network/CLAUDE.md` |
-| `Tools/玩家/接入角色死亡动画（Dead 状态 + 4 方向）` | `PlayerDeathAnimWizard` | 从 MotusMan 死亡 FBX 取 4 方向 clip（Humanoid 可 retarget）→ 给 TPS_Movement/Hunter_Parkour 加 4 个普通死亡状态 `Dead_B/L/F/R`（不用混合树，Unity 2022.3 无 CreateBlendTree 系 API）→ 把 PlayerModel.deadAnimationName 置 `Dead_B`（prefab + 全部场景，幂等；网络死亡复用后倒）。配合 `PlayerModel.Die()` 随机方向播完销毁 |
 | `Tools/配置 Running Slide 动画 (Humanoid)` | `SetupRunningSlide` | 滑铲动画配置 |
 | 自动（`AssetPostprocessor`） | `RedWolfRoseFBXFixer` | FBX 导入后把内嵌材质自动换 `URP/Lit` + 重链贴图（红狼_玫瑰用） |
 
