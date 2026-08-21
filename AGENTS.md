@@ -1,10 +1,19 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+## Codex 执行边界（优先级最高）
+
+- Codex 仅修改代码文件；文档仅在用户明确要求时修改。
+- 不得通过代码、Editor Wizard、AssetDatabase、序列化文件或其他间接手段修改 Scene、Prefab、模型、材质、Animator、Rig、组件引用、NavMesh、输入资产或任何 Unity GUI 配置。
+- 需要组件拖拽、模型/Prefab 放置、Inspector 配置、场景搭建、烘焙或其他 GUI 操作时，说明用户操作步骤并等待用户确认，再继续代码工作。
+- 这项边界覆盖本文中所有历史的“运行 Wizard 修改场景/Prefab”描述；那些描述仅用于解释现有代码和供用户手动操作。
+
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
 ## Project Overview
 
 **ElementWar** — a 3D third-person shooter (TPS) built in Unity 2022.3.62f3 using Universal Render Pipeline (URP). Core playable loop is complete: **three switchable characters**（荧 Lumine / 芙宁娜 Furina / 暗夜猎人 Hunter）、FPS 式代码驱动移动 + 跑酷动画、冲刺/滑铲/瞄准/射击、敌人寻路追击与攻击闭环、玩家/敌人血量、完整死亡流程、主菜单 UI。尚未完成：武器切换/弹药、HUD/准星/暂停菜单、音频、完整关卡。
+
+> **开发者方向**：我的 Unity 开发方向是 **3C（角色/相机/控制手感） · 性能优化 · 网络 · 渲染**。
 
 > ⚠️ **Hunter 暂不装备武器（2026-08-17 起）**：已移除 Hunter 身上的武器 + 全部 Animation Rigging IK 约束（只动 Hunter，荧/芙宁娜照常持枪）。瞄准状态/瞄准动画/双相机保留，开火因武器为空自然无动作。还原点已删（Git 接管，08-17）。
 
@@ -38,13 +47,13 @@ There is no CI/CD or headless build pipeline configured.
 
 ## Architecture
 
-> 📂 **模块文档索引**（子目录 `CLAUDE.md`，读该模块代码时自动加载，改对应目录必读）：
-> - [`Assets/Scripts/Player/CLAUDE.md`](Assets/Scripts/Player/CLAUDE.md) — 玩家系统：状态流转 / FPS 式移动 / 人机 / Hunter 无武器
-> - [`Assets/Scripts/Enemy/CLAUDE.md`](Assets/Scripts/Enemy/CLAUDE.md) — 敌人系统：追击 / 攻击闭环 / 受击 / 死亡
-> - [`Assets/Scripts/Editor/CLAUDE.md`](Assets/Scripts/Editor/CLAUDE.md) — 编辑器向导：Tools/玩家 + Tools/场景 铁律
-> - [`Assets/Scripts/FPS/CLAUDE.md`](Assets/Scripts/FPS/CLAUDE.md) — FPS 原型框架（New Scene 沙盒）
-> - [`Assets/Scripts/Network/CLAUDE.md`](Assets/Scripts/Network/CLAUDE.md) — PVP 网络同步：UDP 权威框架 / 简化移动 / 服务器 Server/（.NET）
-> - [`Assets/Resource/Models/CLAUDE.md`](Assets/Resource/Models/CLAUDE.md) — 模型导入：MMD/URP/Blender 手册
+> 📂 **模块文档索引**（子目录 `AGENTS.md`，读该模块代码时自动加载，改对应目录必读）：
+> - [`Assets/Scripts/Player/AGENTS.md`](Assets/Scripts/Player/AGENTS.md) — 玩家系统：状态流转 / FPS 式移动 / 人机 / Hunter 无武器
+> - [`Assets/Scripts/Enemy/AGENTS.md`](Assets/Scripts/Enemy/AGENTS.md) — 敌人系统：追击 / 攻击闭环 / 受击 / 死亡
+> - [`Assets/Scripts/Editor/AGENTS.md`](Assets/Scripts/Editor/AGENTS.md) — 编辑器向导：Tools/玩家 + Tools/场景 铁律
+> - [`Assets/Scripts/FPS/AGENTS.md`](Assets/Scripts/FPS/AGENTS.md) — FPS 原型框架（New Scene 沙盒）
+> - [`Assets/Scripts/Network/AGENTS.md`](Assets/Scripts/Network/AGENTS.md) — PVP 网络同步：UDP 权威框架 / 简化移动 / 服务器 Server/（.NET）
+> - [`Assets/Resource/Models/AGENTS.md`](Assets/Resource/Models/AGENTS.md) — 模型导入：MMD/URP/Blender 手册
 
 > 模块级细节见上；以下是全局架构摘要：
 
@@ -140,7 +149,7 @@ IStateMachineOwner — marker interface for state machine hosts
 - **人机位移归 NavMeshAgent 独占**：非主控角色在 `LateUpdate` / `OnAnimatorMove` 都不调 `cc.Move`（否则 CC 每帧改 transform 与 NavMeshAgent 抢位置 → 随从原地不动）；`PlayerStateBase` 重力用 `if (IsBeControl())` 包裹（不能 return，人机 else 分支在 base 之后执行）。
 - **State caching**: State instances are created once and reused; `Init()` is called on first creation, `Enter()`/`Exit()` on each transition.
 - **Input is polled** in `PlayerController.Update()`, not event-driven. States read `playerController.moveInput` etc. each frame.
-- **编辑器向导驱动场景修改（Tools/玩家 菜单）**: `Game.unity` 是二进制场景，无法文本编辑——改场景（换控制器/修约束/重烘焙）一律走 `Assets/Scripts/Editor/*Wizard.cs`（LoadPrefabContents 改 prefab + RecordPrefabInstancePropertyModifications 持久化场景实例）。
+- **场景操作边界**：当前主 PVE 场景是 `PVEGame.unity`。场景/Prefab/资源变更必须由用户在 Unity GUI 执行；Codex 只可修改相关 C#，并提供操作步骤、等待确认。
 
 ### State Transitions
 
@@ -194,11 +203,11 @@ Aiming is checked in `PlayerStateBase.Update()` every frame — when `isAiming` 
 | 二次元人物动作包及模型（08-17 新加） | `Assets/CombatGirlsCharacterPack/`（RifleGirl/Humanoid_Bot + 动画 + 武器控制） |
 | Toon shader plugin | `Assets/Plugins/YSA Toon/` |
 | 特效插件 | `Assets/Plugins/EffectCore/` |
-| Main scene | `Assets/Scenes/Game.unity`（GameStart 为主菜单；`New Scene.unity` 为 FPS 沙盒实验场） |
+| Main scene | `Assets/Scenes/PVEGame.unity`（GameStart 为主菜单；`PVPGame.unity` 为在线模式；`New Scene.unity` 为 FPS 沙盒实验场） |
 
 ## Editor Tools（Tools/玩家 菜单）
 
-> `Game.unity` 是二进制场景，改场景/预制体一律走这些向导（幂等可重跑）。核心工具：
+> 下列向导用于说明已有项目能力，须由用户在 Unity GUI 手动执行；Codex 不执行它们，也不以代码替代其场景/资源改动。
 
 | 菜单 | 作用 |
 |------|------|
@@ -222,11 +231,11 @@ Aiming is checked in `PlayerStateBase.Update()` every frame — when `isAiming` 
 | Enums | PascalCase (`PlayerState.Idle`, `EnemyState.Move`) |
 | Comments | Chinese (中文) |
 
-> ⚠️ 刻意保留拼写（非笔误）：`StateMechaine`、`Destory()`、`updataAction`。新代码用标准拼写（见各子目录 CLAUDE.md）。
+> ⚠️ 刻意保留拼写（非笔误）：`StateMechaine`、`Destory()`、`updataAction`。新代码用标准拼写（见各子目录 AGENTS.md）。
 
 ## Critical Implementation Details
 
-- **Slope flicker mitigation**: `cc.isGrounded` is unreliable on slopes. The system uses `HOVER_STABILITY_FRAMES` (currently **5** ≈ 0.083s@60fps) as a buffer — gravity is locked at `-2f` within the window. Only after the window expires does real gravity accumulate and the state transitions to Hover. 历史详见 `Assets/Scripts/Player/CLAUDE.md`（斜坡三层防护由来）。
+- **Slope flicker mitigation**: `cc.isGrounded` is unreliable on slopes. The system uses `HOVER_STABILITY_FRAMES` (currently **5** ≈ 0.083s@60fps) as a buffer — gravity is locked at `-2f` within the window. Only after the window expires does real gravity accumulate and the state transitions to Hover. 历史详见 `Assets/Scripts/Player/AGENTS.md`（斜坡三层防护由来）。
 - **`IsHover()`** uses `Physics.SphereCast` from the actual CharacterController bottom position (accounting for `cc.center`, `cc.height`, `cc.skinWidth`, and `cc.radius`), NOT a simple `transform.position` raycast. 起飞用 `IsHover()`（距离检测）+ 落地用 `cc.isGrounded`（接触检测）的不对称是**有意设计**。
 - **`MyInputSystem.cs`** is auto-generated — edit the `.inputactions` asset, not the C# file.
 - **`OnAnimatorMove()`**: FPS 式移动（`useFPSMovement=true`）时**直接 return 丢弃根运动**（但 `applyRootMotion` 保持 true——Animation Rigging 约束依赖它求值）；旧方案下平均后 3 帧 `animator.velocity`，Hover 时用它维持惯性，并每帧叠加手动 `verticalSpeed`。
@@ -237,17 +246,17 @@ Aiming is checked in `PlayerStateBase.Update()` every frame — when `isAiming` 
   - ⚠️ Hunter 保留：移动/跑酷/瞄准状态/瞄准动画/双瞄准相机（`PlayerAimingState` + `Hunter_Parkour.controller`）。**只删了武器组件与 IK 约束**。
   - 以下武器 IK 通用教训仍适用于荧/芙宁娜：改 MultiAim 数据必须 `ref var d = ref constraint.data`（`var d = data` 复制 struct 改副本无效）；`aimAxis` 是 `[NotKeyable]`，改后需 `rigBuilder.Clear(); Build();` 重建；`offset` 是**后置旋转**（右乘局部空间），按枪管方向算 `offset = FromToRotation(barrelLocal, axisVec).eulerAngles`。
 - **人机位移归 NavMeshAgent 独占**：非主控角色不调 `cc.Move`（否则与 NavMeshAgent 抢位置 → 随从原地不动）；`PlayerStateBase.Update()` 重力逻辑用 `if (IsBeControl())` 包裹但**不能 return**（人机 else 分支在 base 之后执行）。随从三角形队形 `GetFollowerTargetPosition(spacing=2.5, spread=35)`。
-- **场景修改必经编辑器向导**：`Game.unity` 是**二进制场景**，无法文本编辑；改场景（换控制器/修约束/重烘焙）一律走 `Assets/Scripts/Editor/*Wizard.cs`。⚠️ **2026-08-17 起 Game 场景已全部 `UnpackPrefabInstance`（`Tools/场景/解开全部预制体`）**——场景对象已非 prefab 实例，可直接 `SetParent`/自由编辑、无需 `RecordPrefabInstancePropertyModifications`；「prefab 实例内不能 SetParent」的限制仅剩 prefab 资产编辑时适用。代价：改场景不再同步回 prefab 资产；按 prefab 路径识别对象的旧工具已随之删除（08-17 清理）。
+- **场景与资源修改**：Codex 不执行任何场景、Prefab 或资源写入。用户如需变更，在 Unity GUI 中完成；PVE 主场景为 `PVEGame.unity`，现有对象已脱离 Prefab 实例关联，修改场景不会同步回 Prefab 资产。
 - **Bullet**: Rigidbody 飞行（`flyPower=30`）+ 帧间 Raycast 防穿透 + Queue 对象池；命中播特效回池、命中 `Enemy` Tag 调用 `Hurt()`（damage=10）。枪口火花/命中特效/敌人受击特效统一走 `EffectPool`（按预制体分池，粒子播完自动回池）。
 - **NavMesh 出问题（走上天/走不过来/not close enough）**：⚠️ 先查是否 `NavMeshModifier(ignoreFromBuild)` 误标了地面——08-17 事故：旧「标记可能走上天」工具用「顶部离地>2.5m 或浮空>2m」启发式，把 1000×1000 的 Ground 也判成浮空排除 → **0 三角面 → 所有代理 not close enough**。修复跑 `Tools/玩家/修复 NavMesh 排除标记并校正地面（重烘焙）`（移除 ignoreFromBuild + 抬地面 + 清空重建 + 角色吸附，写日志）；排查跑 `Tools/玩家/诊断 NavMesh 层配置（写日志文件）`。旧 `RebakeNavMeshWizard` 已删（其「标记走上天」启发式误伤地面）。注意：层 6 = Environment；`PlayerModel.cc` 运行时才赋值、**编辑模式为 null**（向导别用它算脚底）。
 
 ## PVP 网络同步（2026-08-19 新增）
 
-- **架构**：自定义 UDP 权威框架（参考 CalabiYau，非移植）。服务器是独立 .NET UDP 进程（`Server/`，`dotnet run`），客户端只上报输入和开火意图，服务器 30Hz 权威模拟位置/血量/命中/死亡重生/计分，按客户端全量快照，客户端本地预测 + 误差校正 + 远端插值。
+- **架构**：自定义 UDP 权威框架（参考 CalabiYau，非移植）。服务器是独立 .NET UDP 进程（`Server/`，`dotnet run`），客户端只上报输入和开火意图，服务器 **60Hz** 权威模拟位置/血量/命中/死亡重生/计分，按客户端全量快照，客户端本地预测 + 误差校正 + 远端插值。
 - **简化移动**：C# 服务器跑不了 CharacterController → PVP 用 `PvPMotor`（客户端）与 `GameWorld.SimulatePlayer`（服务器）同一简化数学（无墙碰撞，掩体纯视觉）。PVE 的 CharacterController/状态机完全不动。
 - **PVP 屏蔽 AI 队友**：每客户端只控 1 角色（荧/芙宁娜），`PlayerModel.disableStateMachine=true` + NavMeshAgent 禁用，位移由 PvPMotor 驱动 transform。
 - **入口**：主菜单「在线」→ PVPLobbyUI（IP/角色选择）→ 加载 `PVPGame` 场景（`Tools/玩家/搭建 PVP 场景` 一键搭）。双人测试：服务器 `dotnet run` + 2 个 Unity 客户端实例连 127.0.0.1:7777。
-- 细节、协议、两端 DTO 对齐见 `Assets/Scripts/Network/CLAUDE.md` 与 `Server/`。
+- 细节、协议、两端 DTO 对齐见 `Assets/Scripts/Network/AGENTS.md` 与 `Server/`。
 
 ## Known Issues / TODO
 
