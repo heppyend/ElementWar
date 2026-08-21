@@ -131,7 +131,7 @@ public class PlayerModel : MonoBehaviour,IStateMachineOwner
     public bool isDead;//是否已死亡
     [Tooltip("受击动画名（留空则不播放，需 Animator 中存在对应 clip）")]
     public string hitAnimationName = "";
-    [Tooltip("死亡动画名（留空则不播放，需 Animator 中存在对应 clip）")]
+    [Tooltip("死亡动画状态名（PVP 网络死亡/远端死亡用；PVE 由 Die() 随机选 Dead_B/L/F/R 方向，不走此字段）")]
     public string deadAnimationName = "";
     [Tooltip("受击时是否震动相机")]
     public bool shakeOnHit = true;
@@ -256,27 +256,36 @@ public class PlayerModel : MonoBehaviour,IStateMachineOwner
     }
 
     /// <summary>
-    /// 死亡
+    /// 死亡：播死亡动画（随机倒地方向）→ 等动画播完销毁角色实例（与敌人 ZombieDeadState 一致）。
     /// </summary>
     private void Die()
     {
+        if (isDead) return;//防重复进入
         isDead = true;
 
-        // 死亡动画（动画名留空则跳过）
-        if (!string.IsNullOrEmpty(deadAnimationName))
-            PlayStateAnimation(deadAnimationName, 0.1f);
+        // PVP 网络玩家：死亡/重生由服务器权威管理（ApplyDeathNetwork / ApplyRespawnNetwork），不走 PVE 销毁流程
+        if (disableStateMachine)
+        {
+            Debug.LogWarning($"{name} 网络玩家死亡（不经 PVE 销毁，等服务器重生）。");
+            return;
+        }
 
-        // 停止状态机（状态 Update 注销），禁用移动与寻路
+        // 停止状态机（状态 Update 注销；瞄准状态 Exit 会 ExitAim → 相机切回普通视角 + 髋部 IK 权重恢复 1）
         stateMechaine.Stop();
         cc.enabled = false;
         navMeshAgent.enabled = false;
-        Debug.LogWarning($"{name} 已死亡。");//当前无死亡动画，Log 提示玩家角色状态
+
+        // 死亡后关闭武器 IK（防尸体手被 AimTarget 拽着；须在 Stop() 之后——PlayerAimingState.Exit() 的
+        // ExitAim() 会把 rightHandConstraint 恢复成 1）。死亡动画已临时关闭（2026-08-21），角色留作静态尸体。
+        if (rightHandAimConstraint != null) rightHandAimConstraint.weight = 0;
+        if (bodyAimConstraint != null) bodyAimConstraint.weight = 0;
+        if (rightHandConstraint != null) rightHandConstraint.weight = 0;
+
+        Debug.LogWarning($"{name} 已死亡。");
         // 通知 PlayerController：随从死亡仅拦截切换；主控死亡触发自动接管/游戏结束
         if (PlayerController.INSTANCE != null)
             PlayerController.INSTANCE.OnPlayerDied(this);
     }
-
-
 
     /// <summary>PVP 网络死亡（disableStateMachine 模式下由 NetClient 调用）：置死 + 播死亡动画。</summary>
     public void ApplyDeathNetwork()
@@ -411,9 +420,9 @@ public class PlayerModel : MonoBehaviour,IStateMachineOwner
     private void OnAnimatorMove()
     {
         if (disableStateMachine) return;//PVP 网络玩家：根运动完全丢弃，位移由 PvPMotor 驱动
-        if (useFPSMovement) return;//FPS 式移动：拦截并丢弃根运动（applyRootMotion=true 时本回调每帧触发，根运动不应用，位移仍由 LateUpdate 的 cc.Move 驱动）
         if (animator == null) return;
-        if (isDead) return;//死亡后不再移动（死亡动画仍由 Animator 播放）
+        if (isDead) return;//死亡后不再移动（死亡动画已临时关闭，尸体静止）
+        if (useFPSMovement) return;//FPS 式移动：拦截并丢弃根运动（applyRootMotion=true 时本回调每帧触发，根运动不应用，位移仍由 LateUpdate 的 cc.Move 驱动）
         Vector3 playerDeltaMovement = animator.deltaPosition;//获取动画控制器当前帧的位置信息
         if (currentState == PlayerState.Slide)
         {

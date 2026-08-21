@@ -58,6 +58,7 @@ public class GameOverUI : MonoBehaviour
         GameObject title = new GameObject("GameOverTitle", typeof(RectTransform), typeof(TextMeshProUGUI));
         title.transform.SetParent(canvasGO.transform, false);
         TextMeshProUGUI titleText = title.GetComponent<TextMeshProUGUI>();
+        titleText.font = CJKFont(); // 显式指定中文字体，防口口口
         titleText.text = "GAME OVER";
         titleText.fontSize = 100;
         titleText.alignment = TextAlignmentOptions.Center;
@@ -72,6 +73,7 @@ public class GameOverUI : MonoBehaviour
         GameObject hint = new GameObject("HintText", typeof(RectTransform), typeof(TextMeshProUGUI));
         hint.transform.SetParent(canvasGO.transform, false);
         TextMeshProUGUI hintText = hint.GetComponent<TextMeshProUGUI>();
+        hintText.font = CJKFont(); // 显式指定中文字体，防口口口
         hintText.text = "按任意键返回主菜单";
         hintText.fontSize = 32;
         hintText.alignment = TextAlignmentOptions.Center;
@@ -81,5 +83,23 @@ public class GameOverUI : MonoBehaviour
         hintRT.anchorMax = new Vector2(0.5f, 0.5f);
         hintRT.anchoredPosition = new Vector2(0, -150);
         hintRT.sizeDelta = new Vector2(600, 60);
+    }
+
+    /// <summary>
+    /// 取能渲染中文的 TMP 字体（防口口口）：
+    /// CJKFontWizard（Tools/玩家/烘焙中文默认字体）已把 CJK_Default_SDF 烘焙并设为 TMP 默认字体。
+    /// 这里显式赋值而非依赖 TextMeshProUGUI 的默认行为——旧构建/旧序列化下默认可能仍是
+    /// LiberationSans SDF（无 CJK 字形 → 中文显示为口口口），显式指定 + 醒目警告便于定位。
+    /// </summary>
+    private static TMP_FontAsset CJKFont()
+    {
+        TMP_FontAsset font = TMP_Settings.defaultFontAsset;
+        if (font == null || font.name.StartsWith("LiberationSans"))
+        {
+            Debug.LogWarning(
+                $"[GameOverUI] 中文字体未生效（当前 TMP 默认字体 {(font != null ? font.name : "null")} 无 CJK 字形 → 口口口）。" +
+                "请运行 Tools/玩家/烘焙中文默认字体（修复口口口）后重新构建。");
+        }
+        return font;
     }
 }
