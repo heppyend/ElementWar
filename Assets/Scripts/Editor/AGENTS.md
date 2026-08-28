@@ -6,7 +6,7 @@
 
 - 场景与 NavMesh：`FixNavMeshAndGroundWizard`、`NavMeshLayerDiagWizard`、`BakeWalkableWizard`、`NavMeshObstacleWizard`、`SnapToFloorWizard`、`UnpackPrefabsInSceneWizard`。
 - PVP/动画/音频：`BuildPVPSceneWizard`、`AnimatorDiagnosticWizard`、`SetupRunningSlide`、`WeaponAudioWizard`。
-- 表现与导入：`CJKFontWizard`、血效三个 Wizard、`RedWolfRoseFBXFixer`。
+- 表现与导入：`CJKFontWizard`、血效三个 Wizard。
 
 ## 代码约束
 

@@ -9,7 +9,7 @@ using UnityEngine.AI;
 using UnityEngine.SceneManagement;
 
 /// <summary>
-/// 修复 Game 场景 NavMesh「0 三角面 + 角色 not close enough」。
+/// 修复 PVEGame 场景 NavMesh「0 三角面 + 角色 not close enough」。
 ///
 /// 根因（已诊断）：
 ///   ① 所有环境物体（含 Ground 地面）被误加 NavMeshModifier(ignoreFromBuild)=True
@@ -27,7 +27,7 @@ using UnityEngine.SceneManagement;
 /// </summary>
 public static class FixNavMeshAndGroundWizard
 {
-    private const string GameScenePath = "Assets/Scenes/Game.unity";
+    private const string PveScenePath = "Assets/Scenes/PVEGame.unity";
     private const string ReportPath = "../_Diagnostics_NavMeshFix.log";
 
     [MenuItem("Tools/玩家/修复 NavMesh 排除标记并校正地面（重烘焙）")]
@@ -37,7 +37,7 @@ public static class FixNavMeshAndGroundWizard
         void L(string s) { sb.AppendLine(s); Debug.Log(s); }
 
         if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo()) return;
-        Scene scene = EditorSceneManager.OpenScene(GameScenePath, OpenSceneMode.Single);
+        Scene scene = EditorSceneManager.OpenScene(PveScenePath, OpenSceneMode.Single);
         L($"===== NavMesh 修复开始 | 场景: {scene.name} =====");
 
         // ---- 1. 移除 ignoreFromBuild 标记 ----
