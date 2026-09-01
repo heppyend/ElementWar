@@ -20,7 +20,7 @@ public class PlayerModel : MonoBehaviour,IStateMachineOwner
     public Animator animator;
     [HideInInspector]
     public CharacterController cc;
-    private StateMechaine stateMechaine;//动画状态机
+    private StateMachine stateMachine;//动画状态机
     private PlayerState currentState;//当前状态
     /// <summary>当前状态机状态（只读，诊断用）。</summary>
     public PlayerState CurrentState => currentState;
@@ -150,7 +150,7 @@ public class PlayerModel : MonoBehaviour,IStateMachineOwner
     #endregion
     private void Awake()
     {
-        stateMechaine = new StateMechaine(this);
+        stateMachine = new StateMachine(this);
         animator = GetComponent<Animator>();
         cc = GetComponent<CharacterController>();
         navMeshAgent=GetComponent<NavMeshAgent>();
@@ -267,7 +267,7 @@ public class PlayerModel : MonoBehaviour,IStateMachineOwner
             PlayStateAnimation(deadAnimationName, 0.1f);
 
         // 停止状态机（状态 Update 注销），禁用移动与寻路
-        stateMechaine.Stop();
+        stateMachine.Stop();
         cc.enabled = false;
         navMeshAgent.enabled = false;
         Debug.LogWarning($"{name} 已死亡。");//当前无死亡动画，Log 提示玩家角色状态
@@ -307,22 +307,22 @@ public class PlayerModel : MonoBehaviour,IStateMachineOwner
         switch (state)
         {
             case PlayerState.Idle:
-                stateMechaine.EnterState<PlayerIdleState>();
+                stateMachine.EnterState<PlayerIdleState>();
                 break;
             case PlayerState.Move:
-                stateMechaine.EnterState<PlayerMoveState>();
+                stateMachine.EnterState<PlayerMoveState>();
                 break;
             case PlayerState.Hover:
-                stateMechaine.EnterState<PlayerHoverState>();
+                stateMachine.EnterState<PlayerHoverState>();
                 break;
             case PlayerState.Aiming:
-                stateMechaine.EnterState<PlayerAimingState>();
+                stateMachine.EnterState<PlayerAimingState>();
                 break;
             case PlayerState.Slide:
-                stateMechaine.EnterState<PlayerSlideState>();
+                stateMachine.EnterState<PlayerSlideState>();
                 break;
             case PlayerState.Sprint:
-                stateMechaine.EnterState<PlayerSprintState>();
+                stateMachine.EnterState<PlayerSprintState>();
                 break;
         }
         currentState = state;

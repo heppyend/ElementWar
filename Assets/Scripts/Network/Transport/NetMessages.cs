@@ -13,9 +13,13 @@ namespace ElementWar.Net
         public const string Welcome = "welcome";
         public const string WelcomeFull = "welcome_full";
         public const string Input = "input";
+        public const string InputBatch = "inputBatch";
         public const string Fire = "fire";
         public const string FireReceipt = "fireReceipt";
+        public const string Ping = "ping";
+        public const string Pong = "pong";
         public const string Snapshot = "snapshot";
+        public const string Shot = "shot";
         public const string Hit = "hit";
         public const string HealthChanged = "healthChanged";
         public const string Death = "death";
@@ -55,6 +59,13 @@ namespace ElementWar.Net
         public float estimatedRttSeconds, interpolationDelaySeconds;
     }
 
+    [Serializable] public class PlayerInputBatchMessage
+    {
+        public string type = Msg.InputBatch;
+        public int playerId;
+        public PlayerInputMessage[] inputs = Array.Empty<PlayerInputMessage>();
+    }
+
     [Serializable] public class FireRequestMessage
     {
         public string type = Msg.Fire;
@@ -75,6 +86,20 @@ namespace ElementWar.Net
         public int serverTick;
     }
 
+    [Serializable] public class PingMessage
+    {
+        public string type = Msg.Ping;
+        public int sequence;
+        public float clientTimeSeconds;
+    }
+
+    [Serializable] public class PongMessage
+    {
+        public string type = Msg.Pong;
+        public int sequence;
+        public float clientTimeSeconds;
+    }
+
     [Serializable] public class PlayerSnapshotMessage
     {
         public int playerId;
@@ -92,7 +117,21 @@ namespace ElementWar.Net
         public float speedBlend;
         public float verticalSpeed;
         public bool isGrounded;
+        public bool isSliding;
+        public int slideTicksRemaining;
+        public float slideDirectionX, slideDirectionY, slideDirectionZ;
+        public bool slideSprintBoost;
         public int score;
+    }
+
+    [Serializable] public class ShotEventMessage
+    {
+        public string type = Msg.Shot;
+        public int serverTick;
+        public int shooterPlayerId;
+        public int targetPlayerId;
+        public float originX, originY, originZ;
+        public float endX, endY, endZ;
     }
 
     [Serializable] public class WorldSnapshotMessage

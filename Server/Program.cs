@@ -12,6 +12,13 @@ var options = new UdpGameServerOptions
     TickRate = ParseArg("--tickrate", 60),
 };
 options.WorldSettings.EnableBots = ParseFlag("--bots");   // 默认关：单人纯测试不被 bot 秒杀；`--bots` 开训练模式
+options.WorldSettings.ServerTickRate = options.TickRate;
+
+if (ParseFlag("--self-test"))
+{
+    SelfTests.Run();
+    return;
+}
 
 using var shutdown = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) =>

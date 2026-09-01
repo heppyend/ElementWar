@@ -8,14 +8,14 @@ public interface IStateMachineOwner { }//状态机宿主机
 /// <summary>
 /// 角色状态机
 /// </summary>
-public class StateMechaine {
+public class StateMachine {
 
     private StateBase currentState;//当前状态
     private IStateMachineOwner owner;//状态宿主
 
     private Dictionary<Type, StateBase> stateDic = new Dictionary<Type, StateBase>();//状态字典
 
-    public StateMechaine(IStateMachineOwner owner)
+    public StateMachine(IStateMachineOwner owner)
     {
         this.owner = owner;
     }

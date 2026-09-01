@@ -69,7 +69,7 @@ namespace FPS
 
         /// <summary>
         /// 瞄准输入监听：任意地面/空中状态在瞄准或开火时进入瞄准状态。
-        /// Aim 状态自身覆盖为空，避免自我触发（StateMechaine 有防重入兜底）。
+        /// Aim 状态自身覆盖为空，避免自我触发（StateMachine 有防重入兜底）。
         /// </summary>
         protected virtual void HandleAimInput()
         {

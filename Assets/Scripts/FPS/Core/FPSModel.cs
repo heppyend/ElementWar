@@ -5,7 +5,7 @@ namespace FPS
 {
     /// <summary>
     /// FPS 角色模型（宿主）。
-    /// 复用项目原有状态机框架：StateMechaine + StateBase + MonoManager。
+    /// 复用项目原有状态机框架：StateMachine + StateBase + MonoManager。
     /// 职责：持有 CharacterController / Animator，驱动状态机，统一移动（OnAnimatorMove）+ 重力 + 地面检测。
     /// 移动采用"手动移动"：各状态每帧写入 horizontalVelocity 与 verticalSpeed，OnAnimatorMove 统一 Move。
     /// </summary>
@@ -77,12 +77,12 @@ namespace FPS
         [HideInInspector] public int ungroundedFrameCount;      // 连续离地帧数
         [HideInInspector] public bool isSprinting;              // 是否冲刺
 
-        private StateMechaine stateMechaine;
+        private StateMachine stateMachine;
         private FPSState currentState;
 
         private void Awake()
         {
-            stateMechaine = new StateMechaine(this);
+            stateMachine = new StateMachine(this);
             if (animator == null) animator = GetComponent<Animator>();
             if (cc == null) cc = GetComponent<CharacterController>();
             // 关键：关闭 Apply Root Motion。
@@ -129,17 +129,17 @@ namespace FPS
             cc.Move(delta);
         }
 
-        /// <summary>切换状态（分发到 StateMechaine）</summary>
+        /// <summary>切换状态（分发到 StateMachine）</summary>
         public void SwitchState(FPSState state)
         {
             switch (state)
             {
-                case FPSState.Idle: stateMechaine.EnterState<FPSIdleState>(); break;
-                case FPSState.Move: stateMechaine.EnterState<FPSMoveState>(); break;
-                case FPSState.Sprint: stateMechaine.EnterState<FPSSprintState>(); break;
-                case FPSState.Air: stateMechaine.EnterState<FPSAirState>(); break;
-                case FPSState.Slide: stateMechaine.EnterState<FPSSlideState>(); break;
-                case FPSState.Aim: stateMechaine.EnterState<FPSAimState>(); break;
+                case FPSState.Idle: stateMachine.EnterState<FPSIdleState>(); break;
+                case FPSState.Move: stateMachine.EnterState<FPSMoveState>(); break;
+                case FPSState.Sprint: stateMachine.EnterState<FPSSprintState>(); break;
+                case FPSState.Air: stateMachine.EnterState<FPSAirState>(); break;
+                case FPSState.Slide: stateMachine.EnterState<FPSSlideState>(); break;
+                case FPSState.Aim: stateMachine.EnterState<FPSAimState>(); break;
             }
             currentState = state;
         }

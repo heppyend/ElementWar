@@ -22,6 +22,7 @@ public sealed class GameWorldSettings
     public float RotationSpeedDeg = 300f;
     public int MaxHealth = 100;
     public int FireDamage = 25;
+    public int BotFireDamage = 0;                // 训练 Bot 只用于同步验证，不扣真人血量
     public float FireCooldownSeconds = 0.15f;   // 与客户端视觉射速一致（PVE bulletInterval=0.15s），否则视觉 6.67 发/秒只有 1/5 结算
     public float RespawnSeconds = 3f;
     public float FireRange = 35f;
@@ -78,7 +79,7 @@ public sealed class ServerPlayer
     public int NextAllowedFireServerTick;
     public float SpeedBlend;
     public int MoveState;                       // 0 idle 1 move 2 sprint 3 aim 4 hover
-    public bool JumpQueued;                     // 跳跃锁存：任意一条输入触发后保留到起跳（防 latest-input 吞掉瞬发）
+    public bool JumpQueued;                     // 跳跃锁存：输入消费与模拟之间保留瞬发触发
     public bool IsSliding;                      // 滑铲进行中（计时状态，不依赖后续输入）
     public int SlideTicksRemaining;
     public Vec3 SlideDirection;
@@ -112,6 +113,7 @@ public sealed class GameWorld
     public bool MatchEnded;
     public readonly List<object> PendingReliableEvents = new(); // Death/Respawn/Kill/MatchEnd 逻辑事件（每 tick 清空）
     public readonly List<(int shooter, int target, Vec3 hit, int damage)> PendingHits = new(); // 命中广播（每 tick 清空）
+    public readonly List<(int shooter, int target, Vec3 origin, Vec3 end)> PendingShots = new(); // 所有权威开火（命中或未命中）
 
     private readonly Dictionary<int, ServerPlayer> _players = new();
     private int _nextPlayerId = 1;      // 人类 id：始终 1、2、3…（bot 用独立负数 id，不占人类序号）
@@ -146,10 +148,12 @@ public sealed class GameWorld
             CharacterId = characterId,
             Health = Settings.MaxHealth,
             MaxHealth = Settings.MaxHealth,
+            LastProcessedInputTick = ServerTick,
         };
         // 出生点：玩家按 id 交替分到对称位置；Y 用该角色脚底偏移
         p.GroundY = GetGroundY(characterId);
-        p.SpawnSide = (id % 2 == 0) ? 1f : -1f;
+        // 与 PVPGame 的 spawnPoints 数组一致：玩家1在 +Z，玩家2在 -Z。
+        p.SpawnSide = (id % 2 == 0) ? -1f : 1f;
         float side = p.SpawnSide;
         p.Position = new Vec3(side * 0f, p.GroundY, side * 6f);
         p.BodyYawDeg = (side < 0f) ? 0f : 180f;
@@ -256,12 +260,18 @@ public sealed class GameWorld
         if (!_players.TryGetValue(playerId, out var p)) return false;
         if (!p.IsAlive) return false;                       // 死亡不接受新移动输入
         if (!IsFinite(msg.WorldMoveX) || !IsFinite(msg.WorldMoveY) || !IsFinite(msg.WorldMoveZ)) return false;
+        if (!IsFinite(msg.BodyYawDeg)) return false;
         if (!IsFinite(msg.AimX) || !IsFinite(msg.AimY) || !IsFinite(msg.AimZ)) return false;
         if (msg.InputTick <= p.LastProcessedInputTick) return false;      // 太旧/重复
         if (msg.InputTick > ServerTick + Settings.MaxInputAheadTicks) return false;
-        if (msg.InputTick < ServerTick - Settings.MaxInputLagTicks) return false;
-        if (p.PendingInputs.Count >= Settings.InputBufferSize) return false;
+        int expectedTick = p.LastProcessedInputTick + 1;
+        if (msg.InputTick < ServerTick - Settings.MaxInputLagTicks && msg.InputTick != expectedTick) return false;
         if (p.PendingInputs.ContainsKey(msg.InputTick)) return false;     // 重复 tick
+        if (p.PendingInputs.Count >= Settings.InputBufferSize)
+        {
+            if (msg.InputTick != expectedTick) return false;
+            p.PendingInputs.Remove(p.PendingInputs.Last().Key); // 为缺失的下一条命令腾位置，避免缓冲死锁
+        }
         p.PendingInputs[msg.InputTick] = msg;
         return true;
     }
@@ -285,6 +295,7 @@ public sealed class GameWorld
         ServerTick++;
         PendingReliableEvents.Clear();
         PendingHits.Clear();
+        PendingShots.Clear();
 
         // ① 重生
         foreach (var p in _players.Values)
@@ -301,7 +312,7 @@ public sealed class GameWorld
                 if (p.IsBot) SimulateBot(p, dt);
                 else
                 {
-                    var input = ConsumeLatestInput(p);
+                    var input = ConsumeNextInput(p);
                     SimulatePlayer(p, input, dt);
                 }
             }
@@ -318,10 +329,10 @@ public sealed class GameWorld
     }
 
     /// <summary>
-    /// 消费输入：latest-input 语义（每 tick 取最新一条，更早丢弃）。
+    /// 消费输入：每 tick 按 inputTick 顺序消费一条；客户端会冗余发送最近命令，丢包不再形成永久空洞。
     /// 无新输入时在 key-up 丢失窗口内复用最近一次输入，超过窗口返回 null（停止移动）。
     /// </summary>
-    private PlayerInputMessage? ConsumeLatestInput(ServerPlayer p)
+    private PlayerInputMessage? ConsumeNextInput(ServerPlayer p)
     {
         if (p.PendingInputs.Count == 0)
         {
@@ -333,14 +344,19 @@ public sealed class GameWorld
             return null;              // 超时：停住（key-up 已丢失）
         }
 
-        // latest-input：只消费最新一条
-        var kv = p.PendingInputs.Last();
-        var input = kv.Value;
-        p.PendingInputs.Clear();
+        int expectedTick = p.LastProcessedInputTick + 1;
+        if (!p.PendingInputs.TryGetValue(expectedTick, out var input))
+        {
+            p.NoInputTicks++;
+            if (p.NoInputTicks <= Settings.InputHoldTimeoutTicks && p.LastInput != null)
+                return p.LastInput;
+            return null;
+        }
+        p.PendingInputs.Remove(expectedTick);
         p.LastProcessedInputTick = input.InputTick;
         p.NoInputTicks = 0;
         p.LastInput = input;
-        if (input.IsJumping) p.JumpQueued = true;   // 锁存跳跃（latest-input 语义下瞬发 true 会被后续输入覆盖）
+        if (input.IsJumping) p.JumpQueued = true;
 
         p.AimPoint = new Vec3(input.AimX, input.AimY, input.AimZ);
         p.BodyYawDeg = input.BodyYawDeg;
@@ -380,7 +396,7 @@ public sealed class GameWorld
             return;
         }
 
-        // 滑铲触发：地面 + 本帧 isSlide（客户端 isSlide 只在一个 30Hz 帧为 true，发完即清锁存）
+        // 滑铲触发：地面 + 本固定 tick 的 isSlide。
         if (p.IsGrounded && input.IsSlide)
         {
             p.IsSliding = true;
@@ -401,18 +417,19 @@ public sealed class GameWorld
         // 移动速度选择
         Vec3 inputDir = new Vec3(input.WorldMoveX, 0f, input.WorldMoveZ).NormalizedXZ();
         bool moving = inputDir.Magnitude > 0.01f;
+        bool aiming = input.IsAiming || input.IsFire;
         float speed = 0f;
         if (moving)
         {
             speed = input.IsSprint ? Settings.SprintSpeed
-                  : input.IsAiming ? Settings.AimMoveSpeed
+                  : aiming ? Settings.AimMoveSpeed
                   : Settings.JogSpeed;
         }
 
         // 位移方向：瞄准沿输入（侧移）；非瞄准沿当前朝向（与客户端 PvPMotor 一致——
         // 换向走弧线、面朝=移动方向，否则换向/反方向时角色倒车/侧跑 = 对方视角"乱跑"）
         Vec3 moveDir;
-        if (input.IsAiming)
+        if (aiming)
             moveDir = inputDir;
         else
         {
@@ -455,10 +472,10 @@ public sealed class GameWorld
         }
         else if (moving)
         {
-            p.MoveState = input.IsSprint ? 2 : input.IsAiming ? 3 : 1;
-            p.SpeedBlend = input.IsSprint ? 1f : input.IsAiming ? 0.5f : 0.66f;
+            p.MoveState = input.IsSprint ? 2 : aiming ? 3 : 1;
+            p.SpeedBlend = input.IsSprint ? 1f : aiming ? 0.5f : 0.66f;
         }
-        else if (input.IsAiming)
+        else if (aiming)
         {
             // 瞄准待机：发瞄准态（否则对方看到瞄准者播 Idle 待机姿势 = 枪放下，姿态对不上）
             p.MoveState = 3;
@@ -603,7 +620,7 @@ public sealed class GameWorld
 
         p.NextAllowedFireServerTick = ServerTick + (int)Math.Round(Settings.FireCooldownSeconds * Settings.ServerTickRate);
         p.AimPoint = aimBase;
-        ResolveShot(p, origin, aimDir, 0f);
+        ResolveShot(p, origin, aimDir, 0f, Settings.BotFireDamage);
     }
 
     private void StoreHistory(ServerPlayer p)
@@ -633,14 +650,14 @@ public sealed class GameWorld
 
         // 延迟补偿：回到开火时刻的目标位置
         float rewind = Math.Min(
-            fire.EstimatedRttSeconds + fire.InterpolationDelaySeconds,
+            fire.EstimatedRttSeconds * 0.5f + fire.InterpolationDelaySeconds,
             Settings.MaxLagCompRewindSeconds);
 
-        ResolveShot(p, origin, aimDir, rewind);
+        ResolveShot(p, origin, aimDir, rewind, Settings.FireDamage);
     }
 
     /// <summary>共享命中结算：射线 vs 全体其他玩家（历史帧胶囊，延迟补偿）+ 伤害。人类与 bot 共用。</summary>
-    private void ResolveShot(ServerPlayer p, Vec3 origin, Vec3 aimDir, float rewindSeconds)
+    private void ResolveShot(ServerPlayer p, Vec3 origin, Vec3 aimDir, float rewindSeconds, int damage)
     {
         int hitTestTick = ServerTick - (int)Math.Round(rewindSeconds * Settings.ServerTickRate);
 
@@ -666,9 +683,10 @@ public sealed class GameWorld
             }
         }
 
-        if (bestTarget is null) return; // 未命中
-
-        ApplyDamage(p, GetPlayer(bestTarget.Value)!, bestHit);
+        Vec3 shotEnd = bestTarget is null ? origin + aimDir * Settings.FireRange : bestHit;
+        PendingShots.Add((p.PlayerId, bestTarget ?? 0, origin, shotEnd));
+        if (bestTarget is not null)
+            ApplyDamage(p, GetPlayer(bestTarget.Value)!, bestHit, damage);
     }
 
     private Vec3 GetHistoryPosition(ServerPlayer target, int hitTestTick, float rewind)
@@ -739,11 +757,11 @@ public sealed class GameWorld
         return segDist;
     }
 
-    private void ApplyDamage(ServerPlayer shooter, ServerPlayer target, Vec3 hit)
+    private void ApplyDamage(ServerPlayer shooter, ServerPlayer target, Vec3 hit, int damage)
     {
-        target.Health -= Settings.FireDamage;
+        target.Health -= damage;
         target.RecentlyHit = true;
-        PendingHits.Add((shooter.PlayerId, target.PlayerId, hit, Settings.FireDamage));
+        PendingHits.Add((shooter.PlayerId, target.PlayerId, hit, damage));
         Console.WriteLine($"[闭环] 命中: P{shooter.PlayerId} → P{target.PlayerId} hp={Math.Max(0, target.Health)}");
         if (target.Health <= 0)
         {
@@ -796,6 +814,9 @@ public sealed class GameWorld
         p.IsSliding = false;           // 重生复位：滑铲/跳跃锁存是瞬发状态，不能残留到下一命（客户端 PvPMotor.Teleport 同步复位）
         p.SlideTicksRemaining = 0;
         p.JumpQueued = false;
+        p.LastProcessedInputTick = ServerTick;
+        p.LastInput = null;
+        p.NoInputTicks = 0;
         PendingReliableEvents.Add(new RespawnEvent(p.PlayerId, p.LifeStateVersion, p.Position, p.Health, p.MaxHealth));
     }
 

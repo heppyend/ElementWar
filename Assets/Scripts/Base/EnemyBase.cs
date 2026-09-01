@@ -15,7 +15,7 @@ public abstract class EnemyBase : MonoBehaviour, IStateMachineOwner
 {
     [HideInInspector]
     public Animator animator;
-    protected StateMechaine stateMachine;
+    protected StateMachine stateMachine;
 
     #region 寻路相关
     [HideInInspector]
@@ -74,7 +74,7 @@ public abstract class EnemyBase : MonoBehaviour, IStateMachineOwner
 
     protected virtual void Awake()
     {
-        stateMachine = new StateMechaine(this);
+        stateMachine = new StateMachine(this);
         animator = GetComponent<Animator>();
         navMeshAgent = GetComponent<NavMeshAgent>();
         navMeshAgent.stoppingDistance = minAttackDistance;

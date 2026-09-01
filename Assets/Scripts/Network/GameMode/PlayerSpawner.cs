@@ -31,8 +31,9 @@ namespace ElementWar.Net
                 return null;
             }
             Transform sp = GetSpawnPoint(playerId);
-            // 出生 Y 用 PvPMotor.GroundY：角色原点在"腰"，直接落场景出生点 y=0 会半身入地
-            Vector3 spawnPos = new Vector3(sp.position.x, PvPMotor.GroundY, sp.position.z);
+            // 与服务器 GetGroundY 对齐，避免不同角色首帧发生垂直硬校正。
+            float groundY = characterId == 1 ? 0.15f : 0.025f;
+            Vector3 spawnPos = new Vector3(sp.position.x, groundY, sp.position.z);
             GameObject go = Instantiate(prefab, spawnPos, sp.rotation);
             go.name = $"Local_{playerId}";
             return go.GetComponent<PlayerModel>();

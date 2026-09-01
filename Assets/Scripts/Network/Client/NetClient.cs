@@ -23,26 +23,33 @@ namespace ElementWar.Net
         public PlayerSpawner spawner;
 
         [Header("预测校正")]
-        [SerializeField] float predictionDeadZone = 0.15f;
         [SerializeField] float hardCorrectionDistance = 1.25f;
-        [SerializeField] float smoothCorrectionSpeed = 5f;
 
         // ---- 运行时状态 ----
         private UdpSocket _socket;
         private bool _connected;
         private int _playerId;
-        private int _serverTickRate = 30;
+        private int _serverTickRate = 60;
         private int _winScore = 5;
         private int _inputTick;
         private int _lastServerTick;   // 最近快照的服务器 tick（inputTick 对齐用，防漂移被服务器拒绝）
         private int _fireSequence;
         private float _inputAccumulator;
-        private float _lastRttSampleTime;
         private float _estimatedRtt;
+        private float _nextHelloTime;
+        private float _nextPingTime;
+        private int _pingSequence;
+        private int _lastSnapshotSequence;
+        private bool _hasSnapshotSequence;
+        private int _snapshotLossCount;
+        private int _outOfOrderSnapshotCount;
+        private int _hardCorrectionCount;
+        private int _rejectedFireCount;
+        private float _lastCorrectionDistance;
         private float _fireRequestInterval = 0.15f;   // 客户端开火限速（与 PVE bulletInterval 一致；服务器权威冷却需同步 GameWorldSettings）
         private float _lastFireRequestTime;
         private PVPCameraRig _camRig;                  // 相机震动（懒查找缓存）
-        private float _jumpHoldUntil;   // 跳跃锁存截止时间（时间制，跨帧率可靠；撑到首个 30Hz 帧携带）
+        private float _jumpHoldUntil;   // 跳跃锁存截止时间（时间制，跨渲染帧可靠）
         private float _slideHoldUntil;  // 滑铲锁存截止时间（同上）
 
         private MyInputSystem _input;
@@ -51,8 +58,8 @@ namespace ElementWar.Net
         private PvPMotor _localMotor;
         private readonly Dictionary<int, RemoteAvatar> _remotes = new();
         private readonly HashSet<long> _recentEventIds = new();
-        private readonly Dictionary<int, Vector3> _predictionHistory = new(); // inputTick → 预测位置
-        private Vector3 _lastReconcilePos;
+        private readonly Queue<long> _recentEventOrder = new();
+        private readonly SortedDictionary<int, PlayerInputMessage> _pendingInputs = new();
         private Transform _localAimTarget;   // PVP 瞄准 IK 目标（预制体约束源是空的，运行时补一个接准心）
 
         // 输入采样（每帧更新，供 PvPMotor 与上报共用）
@@ -66,6 +73,14 @@ namespace ElementWar.Net
         public PlayerModel LocalModel => _localModel;
         public PvPMotor LocalMotor => _localMotor;
         public int LocalHealth => _localModel != null ? _localModel.currentHealth : 0;
+        public float EstimatedRttMs => _estimatedRtt * 1000f;
+        public int SnapshotLossCount => _snapshotLossCount;
+        public int OutOfOrderSnapshotCount => _outOfOrderSnapshotCount;
+        public float LastCorrectionDistance => _lastCorrectionDistance;
+        public int HardCorrectionCount => _hardCorrectionCount;
+        public int PendingInputCount => _pendingInputs.Count;
+        public int RejectedFireCount => _rejectedFireCount;
+        public int LastServerTick => _lastServerTick;
 
         /// <summary>计分板：playerId → score（由快照更新，PVPHealthUI 读取）。</summary>
         public readonly Dictionary<int, int> Scores = new();
@@ -104,11 +119,7 @@ namespace ElementWar.Net
             try
             {
                 _socket = new UdpSocket(serverAddress, serverPort);
-                _socket.SendJson(JsonUtility.ToJson(new ClientHelloMessage
-                {
-                    playerName = playerName,
-                    characterId = characterId,
-                }));
+                SendHello();
                 Debug.Log($"[NetClient] 连接 {serverAddress}:{serverPort} 等待 welcome...");
             }
             catch (Exception e)
@@ -122,21 +133,32 @@ namespace ElementWar.Net
             if (_socket == null) return;
             DrainSocket();
 
-            if (!_connected) return;
+            if (!_connected)
+            {
+                if (Time.unscaledTime >= _nextHelloTime) SendHello();
+                return;
+            }
 
             SampleInput();
             if (_localMotor != null) PushInputToMotor();
             if (_localAimTarget != null) _localAimTarget.position = _aimPoint; // 瞄准 IK 目标跟准心
 
-            // 按 30Hz 上报输入
-            // ⚠️ 不做跳跃/滑铲即时上报：即时上报每次多 +1 inputTick → 玩一阵就漂移超前>30 被服务器拒收 → 回弹/抖动。
-            // 瞬发触发靠时间制锁存（SampleInput 里 hold 0.12s）撑到下一个 30Hz 帧携带，延迟 ≤33ms 可忽略。
-            _inputAccumulator += Time.deltaTime;
-            if (_inputAccumulator >= 1f / _serverTickRate)
+            // 位移和输入上报使用同一个固定 tick；渲染帧率不再参与运动积分。
+            if (_localModel != null && !_localModel.isDead)
             {
-                _inputAccumulator = 0f;
-                SendInput();
+                _inputAccumulator += Time.deltaTime;
+                float tickDelta = 1f / Mathf.Max(1, _serverTickRate);
+                int catchUpSteps = 0;
+                while (_inputAccumulator >= tickDelta && catchUpSteps < 4)
+                {
+                    _inputAccumulator -= tickDelta;
+                    SendAndPredictInput(tickDelta);
+                    catchUpSteps++;
+                }
+                if (catchUpSteps == 4) _inputAccumulator = Mathf.Min(_inputAccumulator, tickDelta);
             }
+
+            if (Time.unscaledTime >= _nextPingTime) SendPing();
 
             // 开火：按下触发 FireRequest（服务器权威判定）
             if (_fire && _localModel != null && !_localModel.isDead)
@@ -154,7 +176,7 @@ namespace ElementWar.Net
             _sprint = _input.Player.IsSprint.IsPressed();
             _aiming = _input.Player.IsAiming.IsPressed();
             _fire = _input.Player.Fire.IsPressed();
-            if (_input.Player.IsJumping.triggered) _jumpHoldUntil = Time.time + 0.12f; // 锁存 0.12s（=3 个 30Hz tick，时间制跨帧率可靠）
+            if (_input.Player.IsJumping.triggered) _jumpHoldUntil = Time.time + 0.12f;
             _jumping = _jumpHoldUntil > Time.time;
             if (_input.Player.IsSlide.triggered) _slideHoldUntil = Time.time + 0.12f;
             _slide = _slideHoldUntil > Time.time;
@@ -173,26 +195,19 @@ namespace ElementWar.Net
             if (_mainCamera != null)
             {
                 Ray ray = _mainCamera.ScreenPointToRay(new Vector3(Screen.width * 0.5f, Screen.height * 0.5f, 0f));
-                if (Physics.Raycast(ray, out RaycastHit hit, 500f))
+                RaycastHit[] hits = Physics.RaycastAll(ray, 500f);
+                Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
+                bool found = false;
+                for (int i = 0; i < hits.Length; i++)
                 {
-                    if (_localModel != null && hit.collider != null && hit.collider.transform.root == _localModel.transform)
-                    {
-                        // 命中自身：从命中点再往前射，取真正对准的目标
-                        Vector3 origin2 = hit.point + ray.direction * 0.5f;
-                        if (Physics.Raycast(origin2, ray.direction, out RaycastHit hit2, 500f))
-                            _aimPoint = hit2.point;
-                        else
-                            _aimPoint = ray.origin + ray.direction * 300f;
-                    }
-                    else
-                    {
-                        _aimPoint = hit.point;
-                    }
+                    RaycastHit hit = hits[i];
+                    if (_localModel != null && hit.collider != null
+                        && hit.collider.transform.root == _localModel.transform) continue;
+                    _aimPoint = hit.point;
+                    found = true;
+                    break;
                 }
-                else
-                {
-                    _aimPoint = ray.origin + ray.direction * 300f;
-                }
+                if (!found) _aimPoint = ray.origin + ray.direction * 300f;
             }
         }
 
@@ -210,12 +225,22 @@ namespace ElementWar.Net
 
         // ---------------- 发送 ----------------
 
-        private void SendInput()
+        private void SendHello()
         {
-            // inputTick 下限跟随服务器快照（lastServerTick+2 前瞻）：防"落后漂移"（低帧率/卡顿导致
-            // inputTick 增速 < 服务器 tick 增速 → 被 ServerTick-120 判太旧拒收）。
-            // 超前漂移源（跳跃/滑铲即时上报）已在 Update 删除，靠时间锁存只让 30Hz 帧携带一次。
-            _inputTick = Math.Max(_inputTick + 1, _lastServerTick + 2);
+            _socket.SendJson(JsonUtility.ToJson(new ClientHelloMessage
+            {
+                playerName = playerName,
+                characterId = characterId,
+            }));
+            _nextHelloTime = Time.unscaledTime + 1f;
+        }
+
+        private void SendAndPredictInput(float tickDelta)
+        {
+            _inputTick++;
+            float yaw = _localMotor != null
+                ? _localMotor.CalculateBodyYaw(_worldMove, _aiming || _fire, tickDelta)
+                : 0f;
             var msg = new PlayerInputMessage
             {
                 playerId = _playerId,
@@ -230,24 +255,52 @@ namespace ElementWar.Net
                 worldMoveX = _worldMove.x,
                 worldMoveY = _worldMove.y,
                 worldMoveZ = _worldMove.z,
-                bodyYawDeg = _localMotor != null ? _localMotor.bodyYawDeg : 0f,
+                bodyYawDeg = yaw,
                 aimX = _aimPoint.x,
                 aimY = _aimPoint.y,
                 aimZ = _aimPoint.z,
                 estimatedRttSeconds = _estimatedRtt,
                 interpolationDelaySeconds = 0.1f,
             };
-            _socket.SendJson(JsonUtility.ToJson(msg));
+            if (_localMotor != null)
+                _localMotor.SimulateTick(msg, tickDelta, _serverTickRate);
+            _pendingInputs[_inputTick] = msg;
 
-            // 触发状态只让首个 30Hz 帧携带一次，发完立即清锁存——
+            // 每包带“最早两个未确认命令 + 当前命令”：不扩大单包到 MTU 以上，
+            // 同时让丢失命令持续重发，服务器可严格按 inputTick 顺序累计确认。
+            var redundant = new List<PlayerInputMessage>(3);
+            foreach (var entry in _pendingInputs)
+            {
+                if (redundant.Count >= 2) break;
+                redundant.Add(entry.Value);
+            }
+            if (!redundant.Contains(msg)) redundant.Add(msg);
+            _socket.SendJson(JsonUtility.ToJson(new PlayerInputBatchMessage
+            {
+                playerId = _playerId,
+                inputs = redundant.ToArray(),
+            }));
+
+            // 触发状态只属于一个固定 tick；冗余包重复的是同一个 inputTick，服务器不会重复执行。
             // 否则持续多帧 isJumping=true 会让服务器 JumpQueued 反复锁存 → 落地瞬间自动跳
             _jumpHoldUntil = 0f;
             _slideHoldUntil = 0f;
+            _jumping = false;
+            _slide = false;
 
-            // 记录预测位置用于校正
-            if (_localModel != null)
-                _predictionHistory[_inputTick] = _localModel.transform.position;
-            TrimPredictionHistory();
+            while (_pendingInputs.Count > 512)
+                _pendingInputs.Remove(FirstKey(_pendingInputs));
+        }
+
+        private void SendPing()
+        {
+            _pingSequence++;
+            _socket.SendJson(JsonUtility.ToJson(new PingMessage
+            {
+                sequence = _pingSequence,
+                clientTimeSeconds = Time.realtimeSinceStartup,
+            }));
+            _nextPingTime = Time.unscaledTime + 0.5f;
         }
 
         private void SendFire()
@@ -316,7 +369,14 @@ namespace ElementWar.Net
                         HandleSnapshot(JsonUtility.FromJson<WorldSnapshotMessage>(json));
                         break;
                     case Msg.FireReceipt:
-                        break; // 视觉开火已即时播放，无需等回执
+                        HandleFireReceipt(JsonUtility.FromJson<FireReceiptMessage>(json));
+                        break;
+                    case Msg.Pong:
+                        HandlePong(JsonUtility.FromJson<PongMessage>(json));
+                        break;
+                    case Msg.Shot:
+                        HandleShot(JsonUtility.FromJson<ShotEventMessage>(json));
+                        break;
                     case Msg.Hit:
                         HandleHit(JsonUtility.FromJson<HitEventMessage>(json));
                         break;
@@ -342,6 +402,7 @@ namespace ElementWar.Net
 
         private void HandleWelcome(ServerWelcomeMessage w)
         {
+            if (_connected && _playerId == w.playerId) return;
             _playerId = w.playerId;
             _serverTickRate = w.serverTickRate;
             _winScore = w.winScore;
@@ -366,8 +427,28 @@ namespace ElementWar.Net
 
             // 相机由 PVPCameraRig 自动跟随 LocalModel，无需在此绑定
 
-            _lastRttSampleTime = Time.time;
+            _nextPingTime = Time.unscaledTime;
             Debug.Log($"[NetClient] 已连接 playerId={_playerId} tickRate={_serverTickRate}");
+        }
+
+        private void HandlePong(PongMessage pong)
+        {
+            float sample = Mathf.Max(0f, Time.realtimeSinceStartup - pong.clientTimeSeconds);
+            _estimatedRtt = _estimatedRtt <= 0f ? sample : Mathf.Lerp(_estimatedRtt, sample, 0.2f);
+        }
+
+        private void HandleFireReceipt(FireReceiptMessage receipt)
+        {
+            if (receipt.accepted) return;
+            _rejectedFireCount++;
+            Debug.LogWarning($"[NetClient] 开火被服务器拒绝 seq={receipt.fireSequence} reason={receipt.reason}");
+        }
+
+        private void HandleShot(ShotEventMessage shot)
+        {
+            if (shot.shooterPlayerId == _playerId) return; // 本地已即时播放
+            if (_remotes.TryGetValue(shot.shooterPlayerId, out var shooter))
+                shooter.PlayFire(new Vector3(shot.endX, shot.endY, shot.endZ));
         }
 
         /// <summary>
@@ -419,8 +500,20 @@ namespace ElementWar.Net
 
         private void HandleSnapshot(WorldSnapshotMessage snap)
         {
-            _lastServerTick = snap.serverTick; // 更新对齐基线（inputTick 用）
-            // RTT 粗估：以快照 serverTick 与我们本地 tick 对齐来推（简化：固定值）
+            if (_hasSnapshotSequence)
+            {
+                if (snap.snapshotSequence <= _lastSnapshotSequence)
+                {
+                    _outOfOrderSnapshotCount++;
+                    return;
+                }
+                if (snap.snapshotSequence > _lastSnapshotSequence + 1)
+                    _snapshotLossCount += snap.snapshotSequence - _lastSnapshotSequence - 1;
+            }
+            _hasSnapshotSequence = true;
+            _lastSnapshotSequence = snap.snapshotSequence;
+            _lastServerTick = Mathf.Max(_lastServerTick, snap.serverTick);
+
             // 自己的状态 → 预测校正
             var alive = new HashSet<int>(); // 本快照在场玩家（修剪 Scores/BotIds 用）
             for (int i = 0; i < snap.players.Length; i++)
@@ -482,61 +575,53 @@ namespace ElementWar.Net
             return av;
         }
 
-        /// <summary>本地预测误差校正：死区忽略 / 硬阈值瞬移 / 否则平滑。</summary>
+        /// <summary>以权威快照为基线，移除已确认输入，再重放仍未确认的固定 tick 命令。</summary>
         private void ReconcileLocal(PlayerSnapshotMessage ps)
         {
-            if (_localModel == null || _localModel.isDead) return;
-
-            Vector3 serverPos = new Vector3(ps.x, ps.y, ps.z);
-            float serverYaw = ps.bodyYawDeg;
-
-            // 用 lastProcessedInputTick 对应的预测位置算误差
-            Vector3 predictedAtAck = _localModel.transform.position;
-            if (_predictionHistory.TryGetValue(ps.lastProcessedInputTick, out var recorded))
-                predictedAtAck = recorded;
-
-            // 权威血量同步到本地模型（HUD 读取）
+            if (_localModel == null) return;
             _localModel.currentHealth = ps.health;
             _localModel.maxHealth = ps.maxHealth;
+            if (_localModel.isDead || _localMotor == null) return;
 
-            Vector3 err = serverPos - predictedAtAck;
-            float dist = err.magnitude;
+            Vector3 before = _localModel.transform.position;
+            _localMotor.ApplyAuthoritativeState(ps);
 
-            if (dist > hardCorrectionDistance)
-            {
-                // 硬校正：瞬移（用 CC 兼容方式：直接设 transform，PvPMotor 驱动所以无 CC）
-                if (_localMotor != null) _localMotor.Teleport(serverPos, serverYaw);
-                else _localModel.transform.position = serverPos;
-            }
-            else if (dist > predictionDeadZone)
-            {
-                // 平滑校正：目标 = 当前位置 + 误差
-                Vector3 target = _localModel.transform.position + err;
-                Vector3 newPos = Vector3.Lerp(_localModel.transform.position, target, smoothCorrectionSpeed * Time.deltaTime);
-                if (_localMotor != null) _localMotor.ApplyState(newPos, serverYaw, _localMotor.VerticalSpeed, _localMotor.IsGrounded);
-                else _localModel.transform.position = newPos;
-            }
-            _lastReconcilePos = serverPos;
+            var acknowledged = new List<int>();
+            foreach (var entry in _pendingInputs)
+                if (entry.Key <= ps.lastProcessedInputTick) acknowledged.Add(entry.Key);
+            foreach (int tick in acknowledged) _pendingInputs.Remove(tick);
+
+            float tickDelta = 1f / Mathf.Max(1, _serverTickRate);
+            foreach (var entry in _pendingInputs)
+                _localMotor.SimulateTick(entry.Value, tickDelta, _serverTickRate);
+
+            _lastCorrectionDistance = Vector3.Distance(before, _localModel.transform.position);
+            if (_lastCorrectionDistance > hardCorrectionDistance) _hardCorrectionCount++;
         }
 
-        private void TrimPredictionHistory()
+        private static int FirstKey(SortedDictionary<int, PlayerInputMessage> values)
         {
-            if (_predictionHistory.Count <= 128) return;
-            var oldest = int.MaxValue;
-            foreach (var k in _predictionHistory.Keys) oldest = Math.Min(oldest, k);
-            _predictionHistory.Remove(oldest);
+            foreach (int key in values.Keys) return key;
+            return 0;
         }
 
         private void HandleHit(HitEventMessage h)
         {
-            if (h.targetPlayerId != _playerId) return;
+            // 训练 Bot 的 0 伤害射击只保留服务器端开火表现；不能再触发本地受击特效/相机震动。
+            if (h.damage <= 0) return;
+            Vector3 hitPoint = new Vector3(h.hitX, h.hitY, h.hitZ);
+            if (h.targetPlayerId != _playerId)
+            {
+                if (_remotes.TryGetValue(h.targetPlayerId, out var remote)) remote.ApplyHit(hitPoint);
+                return;
+            }
             // 受击反馈：命中点播受击特效 + 相机震动（对应 PVE TakeDamage → ShakeCamera）
             Debug.Log($"[NetClient] 被 {h.shooterPlayerId} 击中 -{h.damage}");
             if (_localModel != null && _localModel.weapon != null)
             {
                 var bulletPrefab = _localModel.weapon.bulletEffectPrefab;
                 if (bulletPrefab != null && bulletPrefab.impactPrefab != null)
-                    EffectPool.INSTANCE.GetEffect(bulletPrefab.impactPrefab, new Vector3(h.hitX, h.hitY, h.hitZ), Quaternion.identity);
+                    EffectPool.INSTANCE.GetEffect(bulletPrefab.impactPrefab, hitPoint, Quaternion.identity);
             }
             if (_camRig == null) _camRig = FindObjectOfType<PVPCameraRig>();
             if (_camRig != null) _camRig.ShakeCamera();
@@ -545,10 +630,12 @@ namespace ElementWar.Net
         private void HandleReliableEvent(string json)
         {
             var e = JsonUtility.FromJson<ReliableEventMessage>(json);
-            if (_recentEventIds.Contains(e.eventId)) return; // 去重
+            SendAck(e.eventId); // 重复包也必须再次 ACK，否则服务器会一直重发
+            if (_recentEventIds.Contains(e.eventId)) return;
             _recentEventIds.Add(e.eventId);
-            if (_recentEventIds.Count > 128) _recentEventIds.Clear();
-            SendAck(e.eventId);
+            _recentEventOrder.Enqueue(e.eventId);
+            while (_recentEventOrder.Count > 128)
+                _recentEventIds.Remove(_recentEventOrder.Dequeue());
 
             switch (e.type)
             {
@@ -571,6 +658,8 @@ namespace ElementWar.Net
 
         private void OnLocalDeath(ReliableEventMessage e)
         {
+            _pendingInputs.Clear();
+            _inputAccumulator = 0f;
             if (_localModel != null && !_localModel.isDead)
                 _localModel.ApplyDeathNetwork();
             OnLocalDied?.Invoke();
@@ -578,8 +667,10 @@ namespace ElementWar.Net
 
         private void OnLocalRespawn(ReliableEventMessage e)
         {
+            _inputTick = Mathf.Max(_inputTick, e.serverTick);
+            _pendingInputs.Clear();
             if (_localMotor != null)
-                _localMotor.Teleport(new Vector3(e.x, e.y, e.z), 0f);
+                _localMotor.Teleport(new Vector3(e.x, e.y, e.z), _playerId % 2 == 0 ? 0f : 180f);
             if (_localModel != null)
                 _localModel.ApplyRespawnNetwork(new Vector3(e.x, e.y, e.z), e.health, e.maxHealth);
         }

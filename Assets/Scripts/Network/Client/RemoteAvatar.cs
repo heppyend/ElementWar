@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Animations.Rigging;
 
 namespace ElementWar.Net
 {
@@ -37,6 +38,10 @@ namespace ElementWar.Net
         private int _animState = -1;   // 0=Idle 1=Move 2=Aiming 3=Hover
         private Vector3 _lastRenderPos;   // 用于推瞄准混合（AimingX/Y）的字符局部移动方向
         private bool _hasLastRenderPos;
+        private Transform _aimTarget;
+        private MultiAimConstraint[] _aimConstraints;
+        private TwoBoneIKConstraint _hipIK;
+        private float _aimWeight;
 
         public int PlayerId { get; private set; }
         public bool IsDead { get; private set; }
@@ -49,7 +54,9 @@ namespace ElementWar.Net
             // 角色作为子物体：插值移动的是本容器，角色随之移动（动画不产生根位移）。
             // ⚠️ 子物体必须 Quaternion.identity：容器 rotation 每帧被 LateUpdate 设为插值 yaw，
             //    若子物体再带出生 yaw → 双重旋转（总朝向 = 出生yaw + 插值yaw），远端永远背错方向。
-            var go = Instantiate(characterPrefab, Vector3.zero, Quaternion.identity, transform);
+            var go = Instantiate(characterPrefab, transform);
+            go.transform.localPosition = Vector3.zero;
+            go.transform.localRotation = Quaternion.identity;
             go.name = $"Remote_{playerId}";
             // 复用角色预制体，但禁用状态机（插值直接驱动 transform）
             _model = go.GetComponent<PlayerModel>();
@@ -61,11 +68,12 @@ namespace ElementWar.Net
             _animator = _model != null ? _model.animator : go.GetComponentInChildren<Animator>();
             _healthBar = _model != null ? _model.playerHealthBar : null;
             if (_healthBar != null) _healthBar.alwaysShowHealthBar = true;
+            WireAimTarget(go);
         }
 
         public void ApplyPlayerState(PlayerSnapshotMessage s, int snapServerTick)
         {
-            _lastServerTick = snapServerTick;
+            _lastServerTick = Mathf.Max(_lastServerTick, snapServerTick);
             var st = new BufferedState
             {
                 serverTick = snapServerTick,
@@ -101,11 +109,11 @@ namespace ElementWar.Net
         public void ApplyDeath()
         {
             IsDead = true;
-            if (_animator != null)
+            // 角色当前 Animator 没有统一的 Dead 状态时，不强行 CrossFade 到不存在的状态，
+            // 否则每次死亡事件都会产生 Animator.GotoState 警告并扰乱表现层。
+            if (_animator != null && _model != null && !string.IsNullOrEmpty(_model.deadAnimationName))
             {
-                string deadClip = _model != null && !string.IsNullOrEmpty(_model.deadAnimationName)
-                    ? _model.deadAnimationName : "Dead";
-                _animator.CrossFadeInFixedTime(deadClip, 0.1f);
+                _animator.CrossFadeInFixedTime(_model.deadAnimationName, 0.1f);
             }
             // 简单死亡表现：躺下（禁用移动，让动画播放）
         }
@@ -121,6 +129,48 @@ namespace ElementWar.Net
         public void ApplyHealth(int health, int maxHealth)
         {
             if (_healthBar != null) _healthBar.SetHealth((float)health / maxHealth);
+        }
+
+        public void PlayFire(Vector3 target)
+        {
+            if (_model != null && _model.weapon != null)
+                _model.weapon.Fire(target);
+        }
+
+        public void ApplyHit(Vector3 hitPoint)
+        {
+            if (_model == null || _model.weapon == null) return;
+            var bulletPrefab = _model.weapon.bulletEffectPrefab;
+            if (bulletPrefab != null && bulletPrefab.impactPrefab != null)
+                EffectPool.INSTANCE.GetEffect(bulletPrefab.impactPrefab, hitPoint, Quaternion.identity);
+        }
+
+        private void WireAimTarget(GameObject avatar)
+        {
+            if (_model != null && _model.animator != null)
+                _model.animator.applyRootMotion = true;
+            _aimConstraints = avatar.GetComponentsInChildren<MultiAimConstraint>(true);
+            _hipIK = avatar.GetComponentInChildren<TwoBoneIKConstraint>(true);
+            if (_aimConstraints.Length == 0) return;
+
+            var targetObject = new GameObject("AimTarget_PVP_Remote");
+            targetObject.transform.SetParent(avatar.transform, false);
+            targetObject.transform.localPosition = new Vector3(0f, 1.5f, 5f);
+            _aimTarget = targetObject.transform;
+            foreach (var constraint in _aimConstraints)
+            {
+                ref var data = ref constraint.data;
+                var sources = data.sourceObjects;
+                if (sources.Count > 0)
+                {
+                    sources.SetTransform(0, _aimTarget);
+                    data.sourceObjects = sources;
+                }
+                constraint.weight = 0f;
+            }
+            if (_hipIK != null) _hipIK.weight = 1f;
+            var rig = avatar.GetComponentInChildren<RigBuilder>(true);
+            if (rig != null) { rig.Clear(); rig.Build(); }
         }
 
         private void LateUpdate()
@@ -165,6 +215,12 @@ namespace ElementWar.Net
                 //    ms=1 但 anim=Idle/0.66 大量出现）。用最新状态：动画立即反应移动，
                 //    位置照常 0.1s 插值，角色先跑起来、位移随后追上。
                 var latest = _buffer[_buffer.Count - 1];
+                if (_aimTarget != null) _aimTarget.position = latest.aim;
+                bool aiming = latest.moveState == 3;
+                _aimWeight = Mathf.MoveTowards(_aimWeight, aiming ? 1f : 0f, 8f * Time.deltaTime);
+                if (_aimConstraints != null)
+                    foreach (var constraint in _aimConstraints) constraint.weight = _aimWeight;
+                if (_hipIK != null) _hipIK.weight = 1f - _aimWeight;
                 float blend = latest.speedBlend;
                 _animator.SetFloat(PlayerModel.SpeedHash, blend);
                 _animator.SetBool(PlayerModel.IsGroundedHash, latest.isGrounded);

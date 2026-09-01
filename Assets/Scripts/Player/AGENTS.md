@@ -23,7 +23,7 @@
 
 ## 状态与参数
 
-`Idle ↔ Move ↔ Sprint`；地面状态可进 `Aiming`；Move/Sprint 可进 Slide；跳跃/跌落进 Hover，着地回 Idle。Animator 参数是 `Speed`、`VerticalSpeed`、`IsGrounded`、`IsSprinting`、`AimingX`、`AimingY`、`HoverClip`。保留既有 `StateMechaine`/`Destory()` 拼写。
+`Idle ↔ Move ↔ Sprint`；地面状态可进 `Aiming`；Move/Sprint 可进 Slide；跳跃/跌落进 Hover，着地回 Idle。Animator 参数是 `Speed`、`VerticalSpeed`、`IsGrounded`、`IsSprinting`、`AimingX`、`AimingY`、`HoverClip`。状态机类使用标准拼写 `StateMachine`；仅保留既有 `Destory()` 拼写。
 
 ## GUI 交接
 

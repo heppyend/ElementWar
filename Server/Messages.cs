@@ -47,6 +47,13 @@ public sealed class PlayerInputMessage
     [JsonPropertyName("interpolationDelaySeconds")] public float InterpolationDelaySeconds { get; set; }
 }
 
+public sealed class PlayerInputBatchMessage
+{
+    [JsonPropertyName("type")] public string Type { get; set; } = string.Empty;
+    [JsonPropertyName("playerId")] public int PlayerId { get; set; }
+    [JsonPropertyName("inputs")] public PlayerInputMessage[] Inputs { get; set; } = Array.Empty<PlayerInputMessage>();
+}
+
 public sealed class FireRequestMessage
 {
     [JsonPropertyName("type")] public string Type { get; set; } = string.Empty;
@@ -68,6 +75,20 @@ public sealed class FireReceiptMessage
     [JsonPropertyName("accepted")] public bool Accepted { get; set; }
     [JsonPropertyName("reason")] public string Reason { get; set; } = string.Empty;
     [JsonPropertyName("serverTick")] public int ServerTick { get; set; }
+}
+
+public sealed class PingMessage
+{
+    [JsonPropertyName("type")] public string Type { get; set; } = string.Empty;
+    [JsonPropertyName("sequence")] public int Sequence { get; set; }
+    [JsonPropertyName("clientTimeSeconds")] public float ClientTimeSeconds { get; set; }
+}
+
+public sealed class PongMessage
+{
+    [JsonPropertyName("type")] public string Type { get; set; } = string.Empty;
+    [JsonPropertyName("sequence")] public int Sequence { get; set; }
+    [JsonPropertyName("clientTimeSeconds")] public float ClientTimeSeconds { get; set; }
 }
 
 public sealed class WorldSnapshotMessage
@@ -102,7 +123,27 @@ public sealed class PlayerSnapshotMessage
     [JsonPropertyName("speedBlend")] public float SpeedBlend { get; set; }
     [JsonPropertyName("verticalSpeed")] public float VerticalSpeed { get; set; }
     [JsonPropertyName("isGrounded")] public bool IsGrounded { get; set; }
+    [JsonPropertyName("isSliding")] public bool IsSliding { get; set; }
+    [JsonPropertyName("slideTicksRemaining")] public int SlideTicksRemaining { get; set; }
+    [JsonPropertyName("slideDirectionX")] public float SlideDirectionX { get; set; }
+    [JsonPropertyName("slideDirectionY")] public float SlideDirectionY { get; set; }
+    [JsonPropertyName("slideDirectionZ")] public float SlideDirectionZ { get; set; }
+    [JsonPropertyName("slideSprintBoost")] public bool SlideSprintBoost { get; set; }
     [JsonPropertyName("score")] public int Score { get; set; }
+}
+
+public sealed class ShotEventMessage
+{
+    [JsonPropertyName("type")] public string Type { get; set; } = string.Empty;
+    [JsonPropertyName("serverTick")] public int ServerTick { get; set; }
+    [JsonPropertyName("shooterPlayerId")] public int ShooterPlayerId { get; set; }
+    [JsonPropertyName("targetPlayerId")] public int TargetPlayerId { get; set; }
+    [JsonPropertyName("originX")] public float OriginX { get; set; }
+    [JsonPropertyName("originY")] public float OriginY { get; set; }
+    [JsonPropertyName("originZ")] public float OriginZ { get; set; }
+    [JsonPropertyName("endX")] public float EndX { get; set; }
+    [JsonPropertyName("endY")] public float EndY { get; set; }
+    [JsonPropertyName("endZ")] public float EndZ { get; set; }
 }
 
 public sealed class HitEventMessage

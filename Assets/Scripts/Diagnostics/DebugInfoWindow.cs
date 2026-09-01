@@ -48,6 +48,13 @@ namespace ElementWar
                 sb.AppendLine(net.Connected
                     ? $"网络: 在线  P{net.PlayerId}  玩家 {net.Scores.Count}"
                     : "网络: 连接中…");
+                if (net.Connected)
+                {
+                    sb.AppendLine($"RTT: {net.EstimatedRttMs:F0} ms  ServerTick: {net.LastServerTick}");
+                    sb.AppendLine($"快照丢失: {net.SnapshotLossCount}  乱序: {net.OutOfOrderSnapshotCount}");
+                    sb.AppendLine($"校正: {net.LastCorrectionDistance:F3} m  大校正: {net.HardCorrectionCount}");
+                    sb.AppendLine($"待确认输入: {net.PendingInputCount}  拒绝开火: {net.RejectedFireCount}");
+                }
             }
             _text.text = sb.ToString();
         }
@@ -72,7 +79,7 @@ namespace ElementWar
             bgRt.anchorMax = new Vector2(0f, 1f);
             bgRt.pivot = new Vector2(0f, 1f);
             bgRt.anchoredPosition = new Vector2(10, -8);
-            bgRt.sizeDelta = new Vector2(360, 170);
+            bgRt.sizeDelta = new Vector2(470, 260);
             bgGo.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0.55f);
 
             var textGo = new GameObject("InfoText", typeof(RectTransform), typeof(TextMeshProUGUI));
@@ -82,7 +89,7 @@ namespace ElementWar
             rt.anchorMax = new Vector2(0f, 1f);
             rt.pivot = new Vector2(0f, 1f);
             rt.anchoredPosition = new Vector2(16, -14);
-            rt.sizeDelta = new Vector2(420, 180);
+            rt.sizeDelta = new Vector2(500, 270);
 
             _text = textGo.GetComponent<TextMeshProUGUI>();
             _text.fontSize = 20;

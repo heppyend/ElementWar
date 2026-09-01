@@ -23,10 +23,12 @@ public sealed class ClientConnection
     public uint SnapshotSequence;
     public readonly ReliableEventLedger Ledger = new();
     public bool WelcomeSent;
+    public int RejectedInputs;
+    public int RejectedFires;
 }
 
 /// <summary>
-/// UDP 游戏服务器：接收路由 + 固定 30Hz 权威 Tick + 每客户端快照 + 可靠事件重发。
+/// UDP 游戏服务器：接收路由 + 固定权威 Tick + 每客户端快照 + 可靠事件重发。
 /// 世界/注册表修改都在 stateLock 内；锁内算好待发送内容，锁外发送。
 /// </summary>
 public sealed class UdpGameServer : IDisposable
@@ -96,7 +98,9 @@ public sealed class UdpGameServer : IDisposable
             {
                 case "hello": HandleHello(from, json); break;
                 case "input": HandleInput(from, json); break;
+                case "inputBatch": HandleInputBatch(from, json); break;
                 case "fire": HandleFire(from, json); break;
+                case "ping": HandlePing(from, json); break;
                 case "ack": HandleAck(from, json); break;
                 case "goodbye": HandleGoodbye(from); break;
                 default: break;
@@ -160,7 +164,21 @@ public sealed class UdpGameServer : IDisposable
         var msg = JsonSerializer.Deserialize<PlayerInputMessage>(json);
         if (msg is null) return;
         if (msg.PlayerId != conn.PlayerId) return; // 端点与 playerId 必须一致
-        _world.TryQueueInput(conn.PlayerId, msg);
+        if (!_world.TryQueueInput(conn.PlayerId, msg)) conn.RejectedInputs++;
+    }
+
+    private void HandleInputBatch(IPEndPoint from, string json)
+    {
+        var key = from.ToString();
+        if (!_clients.TryGetValue(key, out var conn)) return;
+        var batch = JsonSerializer.Deserialize<PlayerInputBatchMessage>(json);
+        if (batch is null || batch.PlayerId != conn.PlayerId || batch.Inputs.Length > 4) return;
+        foreach (var input in batch.Inputs)
+        {
+            if (input.PlayerId != conn.PlayerId) continue;
+            // 批内包含最近命令的冗余副本，重复/已确认命令被输入门静默丢弃，不计为异常拒绝。
+            _world.TryQueueInput(conn.PlayerId, input);
+        }
     }
 
     private void HandleFire(IPEndPoint from, string json)
@@ -172,6 +190,7 @@ public sealed class UdpGameServer : IDisposable
         if (msg.PlayerId != conn.PlayerId) return;
 
         bool accepted = _world.TryQueueFire(conn.PlayerId, msg);
+        if (!accepted) conn.RejectedFires++;
         var receipt = new FireReceiptMessage
         {
             Type = "fireReceipt",
@@ -182,6 +201,20 @@ public sealed class UdpGameServer : IDisposable
             ServerTick = _world.ServerTick,
         };
         Send(conn.Endpoint, Serialize(receipt));
+    }
+
+    private void HandlePing(IPEndPoint from, string json)
+    {
+        var key = from.ToString();
+        if (!_clients.TryGetValue(key, out var conn)) return;
+        var ping = JsonSerializer.Deserialize<PingMessage>(json);
+        if (ping is null) return;
+        Send(conn.Endpoint, Serialize(new PongMessage
+        {
+            Type = "pong",
+            Sequence = ping.Sequence,
+            ClientTimeSeconds = ping.ClientTimeSeconds,
+        }));
     }
 
     private void HandleAck(IPEndPoint from, string json)
@@ -226,6 +259,7 @@ public sealed class UdpGameServer : IDisposable
 
                 BuildReliableEventsForAll();
                 BuildReliableResendsForAll();
+                BuildShotBroadcast();
                 BuildHitBroadcast();
 
                 CleanupTimeouts();
@@ -311,9 +345,36 @@ public sealed class UdpGameServer : IDisposable
     {
         foreach (var conn in _clients.Values)
         {
-            foreach (var (json, eventId) in conn.Ledger.CollectDueResends())
+            foreach (var (json, eventId) in conn.Ledger.CollectDueResends(DateTime.UtcNow))
                 _pendingSends.Add((conn.Endpoint, json));
         }
+    }
+
+    /// <summary>所有权威开火广播；远端客户端据此播放枪口、枪声和曳光。</summary>
+    private void BuildShotBroadcast()
+    {
+        if (_world.PendingShots.Count == 0) return;
+        foreach (var conn in _clients.Values)
+        {
+            foreach (var shot in _world.PendingShots)
+            {
+                var msg = new ShotEventMessage
+                {
+                    Type = "shot",
+                    ServerTick = _world.ServerTick,
+                    ShooterPlayerId = shot.shooter,
+                    TargetPlayerId = shot.target,
+                    OriginX = shot.origin.X,
+                    OriginY = shot.origin.Y,
+                    OriginZ = shot.origin.Z,
+                    EndX = shot.end.X,
+                    EndY = shot.end.Y,
+                    EndZ = shot.end.Z,
+                };
+                _pendingSends.Add((conn.Endpoint, Serialize(msg)));
+            }
+        }
+        _world.PendingShots.Clear();
     }
 
     /// <summary>命中事件（不可靠，广播给所有人做反馈）。</summary>
@@ -348,8 +409,11 @@ public sealed class UdpGameServer : IDisposable
     private void Telemetry()
     {
         if (!_options.LogTelemetry || _world.ServerTick % (_options.TickRate * 5) != 0) return; // 每 5s
+        int rejectedInputs = _clients.Values.Sum(c => c.RejectedInputs);
+        int rejectedFires = _clients.Values.Sum(c => c.RejectedFires);
         Console.WriteLine($"[{NowHHmmss()}] tick={_world.ServerTick} 在线={_clients.Count}/2 " +
-                          $"events={_world.PendingReliableEvents.Count} players={string.Join(",", _world.Players.Keys)}");
+                          $"rejectInput={rejectedInputs} rejectFire={rejectedFires} " +
+                          $"players={string.Join(",", _world.Players.Keys)}");
     }
 
     // ---------------- 发送/序列化 ----------------

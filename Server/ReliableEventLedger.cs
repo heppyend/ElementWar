@@ -11,32 +11,47 @@ public sealed class ReliableEventLedger
         public long EventId;
         public string Message = string.Empty;   // 序列化后的 JSON 字符串
         public int ResendCount;
+        public DateTime LastSentUtc;
     }
 
     private readonly LinkedList<PendingEvent> _pending = new();
     private readonly List<(string json, long eventId)> _dueResends = new();
-    private const int MaxResendCount = 4;
-    private const float ResendIntervalSeconds = 0.25f;
+    private const int MaxResendCount = 20;
+    private static readonly TimeSpan ResendInterval = TimeSpan.FromSeconds(0.25);
 
     /// <summary>入队一条可靠事件，返回分配的事件 id。</summary>
-    public long QueueInitial(object wireMessage, long eventId, string json)
+    public long QueueInitial(object wireMessage, long eventId, string json, DateTime? nowUtc = null)
     {
-        _pending.AddLast(new PendingEvent { EventId = eventId, Message = json });
+        _pending.AddLast(new PendingEvent
+        {
+            EventId = eventId,
+            Message = json,
+            LastSentUtc = nowUtc ?? DateTime.UtcNow,
+        });
         return eventId;
     }
 
     /// <summary>收集本次应重发的条目（供发送），并返回各条 eventId。</summary>
-    public IEnumerable<(string json, long eventId)> CollectDueResends()
+    public IEnumerable<(string json, long eventId)> CollectDueResends(DateTime? nowUtc = null)
     {
         _dueResends.Clear();
-        var now = DateTime.UtcNow;
-        foreach (var e in _pending)
+        DateTime now = nowUtc ?? DateTime.UtcNow;
+        var node = _pending.First;
+        while (node != null)
         {
-            if (e.ResendCount < MaxResendCount)
+            var next = node.Next;
+            var e = node.Value;
+            if (e.ResendCount >= MaxResendCount)
+            {
+                _pending.Remove(node);
+            }
+            else if (now - e.LastSentUtc >= ResendInterval)
             {
                 e.ResendCount++;
+                e.LastSentUtc = now;
                 _dueResends.Add((e.Message, e.EventId));
             }
+            node = next;
         }
         return _dueResends;
     }

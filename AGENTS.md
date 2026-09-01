@@ -14,6 +14,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 **ElementWar** — a 3D third-person shooter (TPS) built in Unity 2022.3.62f3 using Universal Render Pipeline (URP). Core playable loop is complete: **three switchable characters**（荧 Lumine / 芙宁娜 Furina / 暗夜猎人 Hunter）、FPS 式代码驱动移动 + 跑酷动画、冲刺/滑铲/瞄准/射击、敌人寻路追击与攻击闭环、玩家/敌人血量、完整死亡流程、主菜单 UI。尚未完成：武器切换/弹药、HUD/准星/暂停菜单、音频、完整关卡。
 
 > **开发者方向**：我的 Unity 开发方向是 **3C（角色/相机/控制手感） · 性能优化 · 网络 · 渲染**。
+> **工程能力方向**：在上述方向上补充建设 **可观测性与数据驱动能力**：以性能预算和 Profiler 证据为依据，以网络延迟/丢包/带宽等指标驱动优化，并推进角色与技能配置解耦，服务后续 Lua、ECS 和多人规模扩展。
 
 > ⚠️ **Hunter 暂不装备武器（2026-08-17 起）**：已移除 Hunter 身上的武器 + 全部 Animation Rigging IK 约束（只动 Hunter，荧/芙宁娜照常持枪）。瞄准状态/瞄准动画/双相机保留，开火因武器为空自然无动作。还原点已删（Git 接管，08-17）。
 
@@ -231,7 +232,7 @@ Aiming is checked in `PlayerStateBase.Update()` every frame — when `isAiming` 
 | Enums | PascalCase (`PlayerState.Idle`, `EnemyState.Move`) |
 | Comments | Chinese (中文) |
 
-> ⚠️ 刻意保留拼写（非笔误）：`StateMechaine`、`Destory()`、`updataAction`。新代码用标准拼写（见各子目录 AGENTS.md）。
+> ⚠️ 历史拼写状态：状态机类已于 2026-08-29 统一为标准拼写 `StateMachine`；`Destory()`、`updataAction` 仍暂时保留。新代码用标准拼写（见各子目录 AGENTS.md）。
 
 ## Critical Implementation Details
 

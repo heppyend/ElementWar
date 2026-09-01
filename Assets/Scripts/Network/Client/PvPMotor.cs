@@ -4,62 +4,57 @@ using UnityEngine.Animations.Rigging;
 namespace ElementWar.Net
 {
     /// <summary>
-    /// PVP 简化移动（本地预测用，数学与 .NET 服务器 GameWorld.SimulatePlayer 完全一致）：
-    /// 直接驱动 transform.position（不用 CharacterController 位移，避免与服务器碰撞差异），
-    /// 并按速度驱动 Animator 参数（Speed/IsGrounded/IsSprinting/AimingX/AimingY）。
-    /// 挂在与 PlayerModel 同一物体上；PlayerModel 需置 disableStateMachine=true。
+    /// PVP 本地预测移动。位移只由 NetClient 按服务器固定 tick 调用 SimulateTick，
+    /// Update 只负责动画与 IK，避免渲染帧率和服务器 tick 不一致造成持续漂移。
     /// </summary>
     [RequireComponent(typeof(PlayerModel))]
     public class PvPMotor : MonoBehaviour
     {
-        // ⚠️ 这些常量必须与服务器 GameWorldSettings 一致（改任一端都要同步）
-        public const float WalkSpeed = 2.2f;
+        // 必须与 Server/GameWorldSettings 保持一致。
         public const float JogSpeed = 5f;
         public const float SprintSpeed = 8f;
         public const float AimMoveSpeed = 2.5f;
-        public const float GroundY = 0.05f;              // 默认脚底偏移（出生点用）；运行时按每角色 CC 精确计算 _groundY
-        public const float TurnSpeedDeg = 720f;          // 转向速度（PVE 的 2.4 倍，消除"视角转了模型没转"）
+        public const float GroundY = 0.05f;
+        public const float TurnSpeedDeg = 720f;
         public const float Gravity = -15f;
         public const float JumpVelocity = 6.7f;
-        // ⚠️ 滑铲常量必须与服务器 GameWorldSettings 一致
         public const float SlideDuration = 0.8f;
         public const float SlideStartSpeed = 7f;
         public const float SlideEndSpeed = 1.5f;
         public const float SprintSlideBoost = 2f;
-        public const float RotationSpeedDeg = 300f;
+        public const float ArenaHalfExtent = 40f;
 
-        [Tooltip("当前输入（由 NetClient 每帧写入）")]
+        [Tooltip("当前表现输入（由 NetClient 每帧写入）")]
         public Vector2 moveInput;
         public bool isSprint, isAiming, isJumping, isSlide, isFire;
-        public Vector3 worldMove = Vector3.zero;   // 相机相对的世界移动方向（XZ）
-        public Vector3 aimPoint = Vector3.zero;    // 世界瞄准点
-        public float bodyYawDeg;                   // 当前朝向（服务器快照校正用）
+        public Vector3 worldMove = Vector3.zero;
+        public Vector3 aimPoint = Vector3.zero;
+        public float bodyYawDeg;
 
         private PlayerModel _model;
         private Animator _animator;
         private float _verticalSpeed;
         private bool _isGrounded = true;
-        private MultiAimConstraint[] _aimConstraints;   // 缓存：枪指准心 IK（PVP 无 PlayerController，需自行管理）
-        private TwoBoneIKConstraint _hipIK;            // 缓存：髋部握枪 IK
-        private float _aimIKWeight;                    // 当前瞄准 IK 权重（平滑过渡）
+        private MultiAimConstraint[] _aimConstraints;
+        private TwoBoneIKConstraint _hipIK;
+        private float _aimIKWeight;
         private float _speedBlend;
-        private int _animState = -1;   // 0=Idle 1=Move 2=Aiming 3=Hover 4=RunningSlide
-        private float _groundY = GroundY;   // 每角色脚底偏移（Awake 按 CC 精确算）
-        // 滑铲状态（边沿触发：isSlide 只在首个 30Hz 帧为 true，NetClient 发完即清锁存）
+        private int _animState = -1;
+        private float _groundY = GroundY;
         private bool _isSliding;
-        private float _slideTimer;
+        private int _slideTicksRemaining;
         private Vector3 _slideDirection = Vector3.forward;
         private bool _slideSprintBoost;
 
-        // 供其他组件（血条/受击）查询
         public float VerticalSpeed => _verticalSpeed;
         public bool IsGrounded => _isGrounded;
         public float SpeedBlend => _speedBlend;
+        public bool IsSliding => _isSliding;
+        public int SlideTicksRemaining => _slideTicksRemaining;
 
         private void Awake()
         {
             _model = GetComponent<PlayerModel>();
-            // 每角色脚底偏移从 CC 精确算（中心 - 高度/2），与服务器 GetGroundY 一致（荧0.025/芙宁娜0.15）
             if (_model != null && _model.cc != null)
                 _groundY = Mathf.Max(0.02f, _model.cc.height * 0.5f - _model.cc.center.y);
         }
@@ -70,141 +65,168 @@ namespace ElementWar.Net
             bodyYawDeg = yawDeg;
             _verticalSpeed = 0f;
             _isGrounded = true;
-            _isSliding = false;   // 重生复位：避免死亡时正在滑铲，重生后残留继续滑（服务器 Respawn 同步复位）
-            _slideTimer = 0f;
+            _isSliding = false;
+            _slideTicksRemaining = 0;
         }
 
-        public void ApplyState(Vector3 pos, float yawDeg, float verticalSpeed, bool grounded)
+        /// <summary>用完整权威移动状态建立重放基线。</summary>
+        public void ApplyAuthoritativeState(PlayerSnapshotMessage state)
         {
-            transform.position = pos;
-            bodyYawDeg = yawDeg;
-            _verticalSpeed = verticalSpeed;
-            _isGrounded = grounded;
-        }
-
-        private void Update()
-        {
-            if (_model == null) return;
-            if (_model.isDead) return; // 死亡冻结：停止位移/动画驱动，让死亡动画完整播放（否则每帧 CrossFade 把死亡动画打断）
-            if (_animator == null) _animator = _model.animator; // 懒加载，避免 Awake 顺序问题
-
-            float dt = Time.deltaTime;
-
-            // 滑铲触发（边沿：isSlide 只在首个 30Hz 帧为 true，NetClient 发完即清锁存）。
-            // 方向：优先移动输入方向，无输入沿用当前朝向（与服务器 SlideDirection 同一规则）
-            if (!_isSliding && isSlide && _isGrounded)
-            {
-                _isSliding = true;
-                _slideTimer = SlideDuration;
-                Vector3 mv = new Vector3(worldMove.x, 0f, worldMove.z);
-                _slideDirection = mv.sqrMagnitude > 0.01f ? mv.normalized : transform.forward;
-                _slideDirection.y = 0f;
+            transform.position = new Vector3(state.x, state.y, state.z);
+            bodyYawDeg = state.bodyYawDeg;
+            _verticalSpeed = state.verticalSpeed;
+            _isGrounded = state.isGrounded;
+            _isSliding = state.isSliding;
+            _slideTicksRemaining = Mathf.Max(0, state.slideTicksRemaining);
+            _slideDirection = new Vector3(state.slideDirectionX, 0f, state.slideDirectionZ);
+            if (_slideDirection.sqrMagnitude < 0.0001f)
+                _slideDirection = transform.forward;
+            else
                 _slideDirection.Normalize();
-                _slideSprintBoost = isSprint;
-            }
+            _slideSprintBoost = state.slideSprintBoost;
+            transform.rotation = Quaternion.Euler(0f, bodyYawDeg, 0f);
+        }
 
-            // 速度选择
-            Vector3 move = new Vector3(worldMove.x, 0f, worldMove.z);
-            float mag = move.magnitude;
-            Vector3 inputDir = mag > 0.01f ? move / mag : Vector3.zero;
-            bool moving = mag > 0.01f;
-            float speed = moving ? (isSprint ? SprintSpeed : isAiming ? AimMoveSpeed : JogSpeed) : 0f;
-            bool aiming = isAiming || isFire;
-
-            // 朝向先算（滑铲→滑铲方向；瞄准→瞬时面向相机；移动→平滑转向输入方向；待机保持当前朝向）。
-            // ⚠️ 必须比位移先算：非瞄准时位移沿当前朝向走（换向成弧线，面朝=移动方向），
-            //    否则换向/反方向时面朝（720°/s 平滑转向）追不上位移 → 倒车/侧跑 = 对方视角"乱跑"（08-21 诊断 166° 朝向差实证）。
-            // ⚠️ 瞄准必须【瞬时】面向相机（PVE 同款）：用 720°/s 平滑会让手停下来后角色还惯性转到相机朝向
-            //    （最长 0.5s），对方视角看"玩家在移动/打转"（08-21 用户反馈）。
+        /// <summary>按当前输入计算本 tick 要发给服务器的权威朝向。</summary>
+        public float CalculateBodyYaw(Vector3 inputWorldMove, bool aiming, float dt)
+        {
             if (_isSliding)
             {
                 float slideYaw = Mathf.Atan2(_slideDirection.x, _slideDirection.z) * Mathf.Rad2Deg;
-                bodyYawDeg = Mathf.MoveTowardsAngle(bodyYawDeg, slideYaw, TurnSpeedDeg * dt);
-            }
-            else if (aiming)
-            {
-                Vector3 camF = Camera.main != null ? Camera.main.transform.forward : Vector3.forward;
-                camF.y = 0f;
-                if (camF.sqrMagnitude > 0.01f)
-                    bodyYawDeg = Mathf.Atan2(camF.x, camF.z) * Mathf.Rad2Deg;
-            }
-            else if (moving)
-            {
-                float targetYaw = Mathf.Atan2(inputDir.x, inputDir.z) * Mathf.Rad2Deg;
-                bodyYawDeg = Mathf.MoveTowardsAngle(bodyYawDeg, targetYaw, TurnSpeedDeg * dt);
-            }
-            // 待机（不瞄准不移动）：保持当前朝向（复刻 PVE，原地转视角不打转）
-            transform.rotation = Quaternion.Euler(0f, bodyYawDeg, 0f);
-
-            // 位移方向：瞄准沿输入（可侧移）；非瞄准沿当前朝向（面朝=移动方向，换向走弧线，不倒车/侧跑）
-            Vector3 moveDir;
-            if (_isSliding)
-            {
-                moveDir = _slideDirection;
-            }
-            else if (aiming)
-            {
-                moveDir = inputDir;
-            }
-            else
-            {
-                moveDir = new Vector3(Mathf.Sin(bodyYawDeg * Mathf.Deg2Rad), 0f, Mathf.Cos(bodyYawDeg * Mathf.Deg2Rad));
+                return Mathf.MoveTowardsAngle(bodyYawDeg, slideYaw, TurnSpeedDeg * dt);
             }
 
-            // 水平位移（transform 直接移动）
-            Vector3 delta = moveDir * (speed * dt);
-            Vector3 newPos = transform.position + delta;
+            if (aiming)
+            {
+                Vector3 cameraForward = Camera.main != null ? Camera.main.transform.forward : transform.forward;
+                cameraForward.y = 0f;
+                if (cameraForward.sqrMagnitude > 0.01f)
+                    return Mathf.Atan2(cameraForward.x, cameraForward.z) * Mathf.Rad2Deg;
+                return bodyYawDeg;
+            }
 
-            // 垂直：重力 + 跳跃（跳跃中断滑铲）
-            if (_isGrounded && isJumping)
+            Vector3 move = new Vector3(inputWorldMove.x, 0f, inputWorldMove.z);
+            if (move.sqrMagnitude <= 0.0001f) return bodyYawDeg;
+            move.Normalize();
+            float targetYaw = Mathf.Atan2(move.x, move.z) * Mathf.Rad2Deg;
+            return Mathf.MoveTowardsAngle(bodyYawDeg, targetYaw, TurnSpeedDeg * dt);
+        }
+
+        /// <summary>执行一次与服务器相同的固定步进；也用于快照后的未确认输入重放。</summary>
+        public void SimulateTick(PlayerInputMessage input, float dt, int serverTickRate)
+        {
+            if (_model == null || _model.isDead || input == null) return;
+
+            bodyYawDeg = input.bodyYawDeg;
+            bool aiming = input.isAiming || input.isFire;
+
+            if (_isGrounded && input.isJumping)
             {
                 _verticalSpeed = JumpVelocity;
                 _isGrounded = false;
                 _isSliding = false;
-            }
-            else if (!_isGrounded)
-            {
-                _verticalSpeed += Gravity * dt;
-                newPos = new Vector3(newPos.x, transform.position.y + _verticalSpeed * dt, newPos.z);
+                _slideTicksRemaining = 0;
             }
 
-            // 滑铲位移覆盖：方向锁定、速度衰减、强制贴地（与服务器 StepSlide 数学一致）
+            if (!_isSliding && _isGrounded && input.isSlide)
+            {
+                _isSliding = true;
+                _slideTicksRemaining = Mathf.Max(1, Mathf.RoundToInt(SlideDuration * serverTickRate));
+                _slideDirection = new Vector3(input.worldMoveX, 0f, input.worldMoveZ);
+                if (_slideDirection.sqrMagnitude <= 0.0001f)
+                {
+                    float yawRad = bodyYawDeg * Mathf.Deg2Rad;
+                    _slideDirection = new Vector3(Mathf.Sin(yawRad), 0f, Mathf.Cos(yawRad));
+                }
+                else
+                {
+                    _slideDirection.Normalize();
+                }
+                _slideSprintBoost = input.isSprint;
+            }
+
             if (_isSliding)
             {
-                float t = _slideTimer / SlideDuration;   // 1→0
-                float slideSpeed = Mathf.Lerp(SlideEndSpeed, SlideStartSpeed, t);
-                if (_slideSprintBoost) slideSpeed += SprintSlideBoost * t;
-                Vector3 sdelta = _slideDirection * (slideSpeed * dt);
-                newPos = new Vector3(transform.position.x + sdelta.x, _groundY, transform.position.z + sdelta.z);
-                _verticalSpeed = 0f;
-                _isGrounded = true;
-                _slideTimer -= dt;
-                if (_slideTimer <= 0f) _isSliding = false;
+                StepSlide(dt, serverTickRate);
+                transform.rotation = Quaternion.Euler(0f, bodyYawDeg, 0f);
+                return;
+            }
+
+            Vector3 inputDir = new Vector3(input.worldMoveX, 0f, input.worldMoveZ);
+            if (inputDir.sqrMagnitude > 1f) inputDir.Normalize();
+            bool moving = inputDir.magnitude > 0.01f;
+            float speed = moving
+                ? input.isSprint ? SprintSpeed : aiming ? AimMoveSpeed : JogSpeed
+                : 0f;
+
+            Vector3 moveDir;
+            if (aiming)
+            {
+                moveDir = inputDir.sqrMagnitude > 0.0001f ? inputDir.normalized : Vector3.zero;
+            }
+            else
+            {
+                float yawRad = bodyYawDeg * Mathf.Deg2Rad;
+                moveDir = new Vector3(Mathf.Sin(yawRad), 0f, Mathf.Cos(yawRad));
+            }
+
+            Vector3 newPos = transform.position + moveDir * (speed * dt);
+            if (!_isGrounded)
+            {
+                _verticalSpeed += Gravity * dt;
+                newPos.y = transform.position.y + _verticalSpeed * dt;
             }
 
             if (newPos.y <= _groundY)
             {
-                newPos = new Vector3(newPos.x, _groundY, newPos.z);
+                newPos.y = _groundY;
                 _verticalSpeed = 0f;
                 _isGrounded = true;
             }
-            transform.position = newPos;
-            _isGrounded = newPos.y <= _groundY + 0.001f;
 
-            // 复刻 PVE 瞄准 IK：只有【瞄准/开火】时 MultiAim(枪指准心)=1，平时髋部握枪(TwoBoneIK)。
-            // 每帧严格按状态设权重（缓存引用 + 平滑过渡），消除"移动时枪还指着准心"的状态残留。
-            // （朝向已在位移前算好，见上；不再重复计算 bodyYawDeg/rotation）
+            newPos.x = Mathf.Clamp(newPos.x, -ArenaHalfExtent, ArenaHalfExtent);
+            newPos.z = Mathf.Clamp(newPos.z, -ArenaHalfExtent, ArenaHalfExtent);
+            transform.position = newPos;
+            transform.rotation = Quaternion.Euler(0f, bodyYawDeg, 0f);
+            _isGrounded = newPos.y <= _groundY + 0.001f;
+        }
+
+        private void StepSlide(float dt, int serverTickRate)
+        {
+            int totalTicks = Mathf.Max(1, Mathf.RoundToInt(SlideDuration * serverTickRate));
+            float t = _slideTicksRemaining / (float)totalTicks;
+            float speed = Mathf.Lerp(SlideEndSpeed, SlideStartSpeed, t);
+            if (_slideSprintBoost) speed += SprintSlideBoost * t;
+
+            Vector3 newPos = transform.position + _slideDirection * (speed * dt);
+            newPos.y = _groundY;
+            newPos.x = Mathf.Clamp(newPos.x, -ArenaHalfExtent, ArenaHalfExtent);
+            newPos.z = Mathf.Clamp(newPos.z, -ArenaHalfExtent, ArenaHalfExtent);
+            transform.position = newPos;
+            _verticalSpeed = 0f;
+            _isGrounded = true;
+            _slideTicksRemaining--;
+            if (_slideTicksRemaining <= 0) _isSliding = false;
+        }
+
+        private void Update()
+        {
+            if (_model == null || _model.isDead) return;
+            if (_animator == null) _animator = _model.animator;
+
+            float dt = Time.deltaTime;
+            bool aiming = isAiming || isFire;
+            bool moving = new Vector3(worldMove.x, 0f, worldMove.z).magnitude > 0.01f;
+
             if (_aimConstraints == null)
             {
                 _aimConstraints = _model.GetComponentsInChildren<MultiAimConstraint>(true);
                 _hipIK = _model.GetComponentInChildren<TwoBoneIKConstraint>(true);
             }
             _aimIKWeight = Mathf.MoveTowards(_aimIKWeight, aiming ? 1f : 0f, 8f * dt);
-            foreach (var c in _aimConstraints) c.weight = _aimIKWeight;
+            foreach (var constraint in _aimConstraints) constraint.weight = _aimIKWeight;
             if (_hipIK != null) _hipIK.weight = 1f - _aimIKWeight;
 
-            // Animator 状态切换：PVE 由状态机 CrossFade 到 Idle/Move/Aiming/Hover，PvPMotor 复刻
-            // （只设 Speed 参数不会切出 Idle 状态 → 角色平移不摆腿、射击不进瞄准姿势）
             int desired = _isSliding ? 4 : !_isGrounded ? 3 : aiming ? 2 : moving ? 1 : 0;
             if (desired != _animState)
             {
@@ -217,19 +239,9 @@ namespace ElementWar.Net
                 if (_animator != null) _animator.CrossFadeInFixedTime(stateName, 0.25f);
             }
 
-            // Animator 参数（与 PVE TPS_Movement.controller 对应）
-            if (!_isGrounded)
-            {
-                _speedBlend = _speedBlend; // 空中保持
-            }
-            else if (moving)
-            {
-                _speedBlend = isSprint ? 1f : aiming ? 0.5f : 0.66f;
-            }
-            else
-            {
-                _speedBlend = 0f;
-            }
+            if (_isGrounded)
+                _speedBlend = moving ? isSprint ? 1f : aiming ? 0.5f : 0.66f : 0f;
+
             if (_animator != null)
             {
                 _animator.SetFloat(PlayerModel.SpeedHash, _speedBlend);

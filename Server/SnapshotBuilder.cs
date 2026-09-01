@@ -33,6 +33,12 @@ public static class SnapshotBuilder
                 SpeedBlend = p.SpeedBlend,
                 VerticalSpeed = p.VerticalSpeed,
                 IsGrounded = p.IsGrounded,
+                IsSliding = p.IsSliding,
+                SlideTicksRemaining = p.SlideTicksRemaining,
+                SlideDirectionX = p.SlideDirection.X,
+                SlideDirectionY = p.SlideDirection.Y,
+                SlideDirectionZ = p.SlideDirection.Z,
+                SlideSprintBoost = p.SlideSprintBoost,
                 Score = p.Score,
             });
         }
