@@ -22,6 +22,8 @@ public sealed class ServerWelcomeMessage
     [JsonPropertyName("winScore")] public int WinScore { get; set; }
     // 当前服务器 tick：客户端据此对齐自己的 inputTick 基线，避免被判"太旧"拒绝
     [JsonPropertyName("serverTick")] public int ServerTick { get; set; }
+    // 服务器进程会话标识：用于把同一场双端测试的客户端日志自动配对
+    [JsonPropertyName("sessionId")] public string SessionId { get; set; } = string.Empty;
 }
 
 public sealed class PlayerInputMessage
@@ -77,6 +79,14 @@ public sealed class FireReceiptMessage
     [JsonPropertyName("serverTick")] public int ServerTick { get; set; }
 }
 
+public sealed class ReloadRequestMessage
+{
+    [JsonPropertyName("type")] public string Type { get; set; } = string.Empty;
+    [JsonPropertyName("playerId")] public int PlayerId { get; set; }
+    [JsonPropertyName("reloadSequence")] public int ReloadSequence { get; set; }
+    [JsonPropertyName("requestTick")] public int RequestTick { get; set; }
+}
+
 public sealed class PingMessage
 {
     [JsonPropertyName("type")] public string Type { get; set; } = string.Empty;
@@ -130,6 +140,9 @@ public sealed class PlayerSnapshotMessage
     [JsonPropertyName("slideDirectionZ")] public float SlideDirectionZ { get; set; }
     [JsonPropertyName("slideSprintBoost")] public bool SlideSprintBoost { get; set; }
     [JsonPropertyName("score")] public int Score { get; set; }
+    [JsonPropertyName("magazineAmmo")] public int MagazineAmmo { get; set; }
+    [JsonPropertyName("reserveAmmo")] public int ReserveAmmo { get; set; }
+    [JsonPropertyName("isReloading")] public bool IsReloading { get; set; }
 }
 
 public sealed class ShotEventMessage

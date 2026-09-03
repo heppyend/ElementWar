@@ -3,6 +3,9 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.SceneManagement;
+using UnityEngine.EventSystems;
+using UnityEngine.InputSystem;
+using UnityEngine.InputSystem.UI;
 
 namespace ElementWar.Net
 {
@@ -21,11 +24,19 @@ namespace ElementWar.Net
         private RectTransform _deathOverlay;
         private TextMeshProUGUI _deathText;
         private RectTransform _endPanel;
+        private RectTransform _backButton;
         private TextMeshProUGUI _endTitle;
         private TextMeshProUGUI _endScores;
+        private TextMeshProUGUI _endCountdown;
+        private bool _returningToMenu;
+        private float _autoReturnAt = -1f;
 
         private void Awake()
         {
+            // PVP 场景通常预置 EventSystem；若被删除或场景切换时缺失，运行时补齐，
+            // 保证结束面板的 GraphicRaycaster/Button 能收到点击。
+            if (FindObjectOfType<EventSystem>() == null)
+                new GameObject("PVP_EventSystem", typeof(EventSystem), typeof(InputSystemUIInputModule));
             BuildUI();
         }
 
@@ -48,6 +59,28 @@ namespace ElementWar.Net
 
         private void Update()
         {
+            if (_endPanel != null && _endPanel.gameObject.activeSelf)
+            {
+                // 光标状态是全局静态值，其他控制器可能在结束后再次锁定；面板显示期间持续保持可点击。
+                Cursor.lockState = CursorLockMode.None;
+                Cursor.visible = true;
+                if (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame)
+                    OnBackToMenu();
+                // 备用点击路径：即使场景中的 InputSystemUIInputModule 配置失效，
+                // 也能直接用屏幕坐标命中结束面板按钮。
+                if (!_returningToMenu && _backButton != null && Mouse.current != null
+                    && Mouse.current.leftButton.wasPressedThisFrame
+                    && RectTransformUtility.RectangleContainsScreenPoint(
+                        _backButton, Mouse.current.position.ReadValue(), null))
+                    OnBackToMenu();
+                if (!_returningToMenu && _autoReturnAt > 0f)
+                {
+                    float remaining = _autoReturnAt - Time.unscaledTime;
+                    if (_endCountdown != null)
+                        _endCountdown.text = remaining > 0f ? $"{remaining:0.0} 秒后返回主菜单" : "正在返回主菜单…";
+                    if (remaining <= 0f) OnBackToMenu();
+                }
+            }
             if (_net == null || _net.LocalModel == null) return;
 
             // 血量条
@@ -79,6 +112,7 @@ namespace ElementWar.Net
             go.transform.SetParent(transform, false);
             _canvas = go.AddComponent<Canvas>();
             _canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+            _canvas.sortingOrder = 1000;
             var scaler = go.AddComponent<CanvasScaler>();
             scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
             scaler.referenceResolution = new Vector2(1920, 1080);
@@ -113,7 +147,8 @@ namespace ElementWar.Net
             panelBg.color = new Color(0, 0, 0, 0.8f);
             _endTitle = NewText("EndTitle", _endPanel, new Vector2(0, 120), new Vector2(800, 80), "对局结束", 48, TextAlignmentOptions.Center);
             _endScores = NewText("EndScores", _endPanel, new Vector2(0, 0), new Vector2(800, 100), "", 28, TextAlignmentOptions.Center);
-            NewButton(_endPanel, new Vector2(0, -150), new Vector2(220, 60), "返回主菜单", OnBackToMenu);
+            _endCountdown = NewText("EndCountdown", _endPanel, new Vector2(0, -90), new Vector2(800, 40), "", 22, TextAlignmentOptions.Center);
+            _backButton = NewButton(_endPanel, new Vector2(0, -150), new Vector2(220, 60), "返回主菜单", OnBackToMenu);
         }
 
         private void ShowDeath()
@@ -123,6 +158,12 @@ namespace ElementWar.Net
 
         private void ShowMatchEnd(int winnerId)
         {
+            // 对局中的相机/输入通常会锁定光标；结束面板必须立即恢复系统光标，
+            // 否则按钮虽然显示出来，但鼠标仍停留在准心位置，无法点击 UI。
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
+            Time.timeScale = 1f;
+
             bool win = winnerId == _net.PlayerId;
             _endTitle.text = win ? "你获胜！"
                 : _net.BotIds.Contains(winnerId) ? "Bot 获胜"
@@ -136,13 +177,22 @@ namespace ElementWar.Net
                 sb.AppendLine($"{who}: {kv.Value} 分");
             }
             _endScores.text = sb.ToString();
+            _autoReturnAt = Time.unscaledTime + 4f;
             _endPanel.gameObject.SetActive(true);
-            Time.timeScale = 0f; // 暂停
+            // 不暂停全局时间：结算阶段由本地角色/远端角色各自以慢速播放视觉回放，
+            // UI 仍可立即交互，网络封盘也不会被 Time.timeScale 影响。
         }
 
         private void OnBackToMenu()
         {
+            if (_returningToMenu) return;
+            _returningToMenu = true;
+            Debug.Log("[PVPHealthUI] 返回主菜单");
+            // 结算后客户端不再发送输入；先显式释放服务器席位，下一局无需等待超时清理。
+            _net?.DisconnectGracefully();
             Time.timeScale = 1f;
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
             SceneManager.LoadScene("GameStart");
         }
 
@@ -194,7 +244,7 @@ namespace ElementWar.Net
             return text;
         }
 
-        private void NewButton(Transform parent, Vector2 anchoredPos, Vector2 size, string label, Action onClick)
+        private RectTransform NewButton(Transform parent, Vector2 anchoredPos, Vector2 size, string label, Action onClick)
         {
             var go = new GameObject("Button", typeof(RectTransform), typeof(Image), typeof(Button));
             go.transform.SetParent(parent, false);
@@ -218,6 +268,7 @@ namespace ElementWar.Net
             t.alignment = TextAlignmentOptions.Center;
             t.color = Color.white;
             t.enableWordWrapping = false;
+            return rt;
         }
     }
 }

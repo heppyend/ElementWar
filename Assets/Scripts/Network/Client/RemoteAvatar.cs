@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Animations.Rigging;
+using UnityEngine.AI;
 
 namespace ElementWar.Net
 {
@@ -22,8 +23,8 @@ namespace ElementWar.Net
             public int moveState;
         }
 
-        [Tooltip("插值延迟（秒），落后最新快照这么多再播放")]
-        public float interpolationDelay = 0.1f;
+        [Tooltip("远端渲染落后服务器的时间；PVP 默认 50ms，降低冲刺/滑铲可见延迟")]
+        public float interpolationDelay = 0.05f;
 
         private const int BufferCapacity = 16;   // 60Hz 下 ≈0.27s 缓冲（30Hz 时代 8 个不够）
 
@@ -42,9 +43,34 @@ namespace ElementWar.Net
         private MultiAimConstraint[] _aimConstraints;
         private TwoBoneIKConstraint _hipIK;
         private float _aimWeight;
+        private bool _settlementPlayback;
+        private float _settlementElapsed;
+        private float _settlementDuration;
+        private float _settlementScale;
+        private Vector3 _settlementVelocity;
 
         public int PlayerId { get; private set; }
         public bool IsDead { get; private set; }
+        public Vector3 LatestAuthoritativePosition { get; private set; }
+
+        /// <summary>比赛结束后的本地视觉回放：从最后两帧估算速度并逐渐减速。</summary>
+        public void BeginSettlementPlayback(float duration, float scale)
+        {
+            _settlementPlayback = true;
+            _settlementElapsed = 0f;
+            _settlementDuration = Mathf.Max(0.1f, duration);
+            _settlementScale = Mathf.Clamp(scale, 0.05f, 1f);
+            _settlementVelocity = Vector3.zero;
+            if (_buffer.Count >= 2)
+            {
+                var a = _buffer[_buffer.Count - 2];
+                var b = _buffer[_buffer.Count - 1];
+                float dt = Mathf.Max(0.001f, (b.serverTick - a.serverTick) / Mathf.Max(1f, _tickRate));
+                _settlementVelocity = (b.pos - a.pos) / dt;
+                _settlementVelocity.y = 0f;
+            }
+            if (_animator != null) _animator.speed = _settlementScale;
+        }
 
         public void Setup(int playerId, GameObject characterPrefab, Vector3 spawnPos, float yawDeg, float tickRate)
         {
@@ -54,7 +80,11 @@ namespace ElementWar.Net
             // 角色作为子物体：插值移动的是本容器，角色随之移动（动画不产生根位移）。
             // ⚠️ 子物体必须 Quaternion.identity：容器 rotation 每帧被 LateUpdate 设为插值 yaw，
             //    若子物体再带出生 yaw → 双重旋转（总朝向 = 出生yaw + 插值yaw），远端永远背错方向。
-            var go = Instantiate(characterPrefab, transform);
+            // 在失活容器中先关闭 prefab 自带 NavMeshAgent，避免 PVP 无 NavMesh 时 Agent OnEnable 报错。
+            var staging = new GameObject("PVP_RemoteSpawnStaging");
+            staging.SetActive(false);
+            staging.transform.SetParent(transform, false);
+            var go = Instantiate(characterPrefab, staging.transform);
             go.transform.localPosition = Vector3.zero;
             go.transform.localRotation = Quaternion.identity;
             go.name = $"Remote_{playerId}";
@@ -63,8 +93,11 @@ namespace ElementWar.Net
             if (_model != null)
             {
                 _model.disableStateMachine = true;
-                if (_model.navMeshAgent != null) _model.navMeshAgent.enabled = false;
             }
+            foreach (var agent in go.GetComponentsInChildren<NavMeshAgent>(true)) agent.enabled = false;
+            go.transform.SetParent(transform, false);
+            go.SetActive(true);
+            Destroy(staging);
             _animator = _model != null ? _model.animator : go.GetComponentInChildren<Animator>();
             _healthBar = _model != null ? _model.playerHealthBar : null;
             if (_healthBar != null) _healthBar.alwaysShowHealthBar = true;
@@ -85,6 +118,7 @@ namespace ElementWar.Net
                 aim = new Vector3(s.aimX, s.aimY, s.aimZ),
                 moveState = s.moveState,
             };
+            LatestAuthoritativePosition = st.pos;
 
             // 按 tick 排序插入（去重同 tick）
             int i = _buffer.Count - 1;
@@ -134,7 +168,13 @@ namespace ElementWar.Net
         public void PlayFire(Vector3 target)
         {
             if (_model != null && _model.weapon != null)
-                _model.weapon.Fire(target);
+                _model.weapon.PlayVisualFire(target);
+        }
+
+        public void ApplyAmmo(int magazineAmmo, int reserveAmmo, bool isReloading)
+        {
+            if (_model != null && _model.weapon != null)
+                _model.weapon.ApplyAuthoritativeAmmo(magazineAmmo, reserveAmmo, isReloading);
         }
 
         public void ApplyHit(Vector3 hitPoint)
@@ -175,6 +215,11 @@ namespace ElementWar.Net
 
         private void LateUpdate()
         {
+            if (_settlementPlayback)
+            {
+                UpdateSettlementPlayback();
+                return;
+            }
             if (_buffer.Count < 2 || !_renderInited) return;
 
             // 渲染游标按真实时间推进（一帧只走 Time.deltaTime*tickRate 个 tick）。
@@ -240,6 +285,13 @@ namespace ElementWar.Net
                     _animator.SetFloat(PlayerModel.AimingXHash, Vector3.Dot(mv, right));
                     _animator.SetFloat(PlayerModel.AimingYHash, Vector3.Dot(mv, fwd));
                 }
+                else
+                {
+                    // 远端静止瞄准时清零八向混合参数，避免沿用上一帧移动方向，
+                    // 导致对方看到角色腿部在原地循环走动。
+                    _animator.SetFloat(PlayerModel.AimingXHash, 0f);
+                    _animator.SetFloat(PlayerModel.AimingYHash, 0f);
+                }
                 _lastRenderPos = transform.position;
                 _hasLastRenderPos = true;
 
@@ -251,7 +303,7 @@ namespace ElementWar.Net
                     {
                         case 1:
                         case 2: desired = 1; break;   // Move（Sprint 靠 Speed→1 走 Dash 段）
-                        case 3: desired = 2; break;   // Aiming
+                        case 3: desired = latest.speedBlend > 0.01f ? 2 : 0; break; // 静止瞄准保持待机，IK仍单独生效
                         case 4: desired = 3; break;   // Hover
                         case 5: desired = 4; break;   // Slide
                         default: desired = 0; break;  // Idle
@@ -267,6 +319,25 @@ namespace ElementWar.Net
                         _animator.CrossFadeInFixedTime(stateName, 0.15f);
                     }
                 }
+            }
+        }
+
+        private void UpdateSettlementPlayback()
+        {
+            float dt = Time.unscaledDeltaTime;
+            _settlementElapsed += dt;
+            float t = Mathf.Clamp01(_settlementElapsed / _settlementDuration);
+            float damping = 1f - Mathf.SmoothStep(0f, 1f, t);
+            Vector3 next = transform.position + _settlementVelocity * (dt * _settlementScale * damping);
+            next = PvpCollisionWorld.ResolveMovement(transform.position, next, PvPMotor.CollisionRadius,
+                PvPMotor.ArenaHalfExtent, PvPMotor.GroundY);
+            transform.position = next;
+
+            if (_settlementElapsed >= _settlementDuration)
+            {
+                _settlementPlayback = false;
+                _settlementVelocity = Vector3.zero;
+                if (_animator != null) _animator.speed = 1f;
             }
         }
 

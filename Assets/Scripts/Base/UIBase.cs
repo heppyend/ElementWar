@@ -11,7 +11,8 @@ public abstract class UIBase<T> : SingleMonoBase<T> where T :UIBase<T>
 {
     public bool show;
     private Animator animator;
-    protected virtual void Awake()
+    private bool enteredByCode;
+    protected override void Awake()
     {
         base.Awake();
         animator = GetComponent<Animator>();
@@ -20,7 +21,10 @@ public abstract class UIBase<T> : SingleMonoBase<T> where T :UIBase<T>
     protected virtual void Start()
     {
         // StartCoroutine(Enter());
-        gameObject.SetActive(show);
+        // 隐藏菜单第一次由 Enter() 激活时，Unity 会随后执行 Start；
+        // 此时不能再用 show=false 把刚打开的菜单立即关掉。
+        if (!enteredByCode)
+            gameObject.SetActive(show);
     }
 
     /// <summary>
@@ -28,6 +32,7 @@ public abstract class UIBase<T> : SingleMonoBase<T> where T :UIBase<T>
     /// </summary>
     public virtual void Enter()
     {
+        enteredByCode = true;
         gameObject.SetActive(true);
         animator.enabled = true;//重新启用（上次 FadeIn 播完后被停用，用于播放本次入场动画）
         animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;

@@ -40,6 +40,9 @@ public static class SnapshotBuilder
                 SlideDirectionZ = p.SlideDirection.Z,
                 SlideSprintBoost = p.SlideSprintBoost,
                 Score = p.Score,
+                MagazineAmmo = p.Weapon.MagazineAmmo,
+                ReserveAmmo = p.Weapon.ReserveAmmo,
+                IsReloading = p.Weapon.IsReloading,
             });
         }
         return list.ToArray();

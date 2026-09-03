@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using ElementWar.Combat;
 using UnityEngine;
 
 /// <summary>
@@ -12,6 +13,7 @@ public class PlayerWeapon : MonoBehaviour
     /// 开火事件（每次成功发射一枪触发；音效等挂载组件订阅，如 WeaponAudio）
     /// </summary>
     public event Action Fired;
+    public event Action<CombatResult> CombatResolved;
 
     [Tooltip("子弹生成的位置")]
     public Transform bulletSpawnPoint;
@@ -21,22 +23,70 @@ public class PlayerWeapon : MonoBehaviour
     public GameObject bulletSparkPrefab;
     [Tooltip("子弹发射间隔")]
     public float bulletInterval = 0.15f;
+    [Header("共享战斗运行时（不新增资产）")]
+    public int magazineCapacity = 30;
+    public int initialMagazineAmmo = 30;
+    public int initialReserveAmmo = 90;
+    public int weaponDamage = 10;
+    public float reloadDuration = 1.5f;
+    [Header("临时调试显示")]
+    public bool showAmmoDebugLabel = true;
 
-    private float lastFireTime;//上一次子弹发射的时间
     private Queue<PlayerWeaponBullet> bulletPool = new Queue<PlayerWeaponBullet>();//子弹对象池
+    private WeaponRuntime combatRuntime;
+    private long nextCombatRequestId;
+    private static GUIStyle ammoDebugStyle;
+
+    public int MagazineAmmo => combatRuntime != null ? combatRuntime.MagazineAmmo : initialMagazineAmmo;
+    public int ReserveAmmo => combatRuntime != null ? combatRuntime.ReserveAmmo : initialReserveAmmo;
+    public bool IsReloading => combatRuntime != null && combatRuntime.IsReloading;
+
+    private void Awake()
+    {
+        int safeCapacity = Mathf.Max(1, magazineCapacity);
+        combatRuntime = new WeaponRuntime(new WeaponDefinition(safeCapacity, Mathf.Max(1, weaponDamage), Mathf.Max(0f, bulletInterval), Mathf.Max(0f, reloadDuration)), Mathf.Clamp(initialMagazineAmmo, 0, safeCapacity), Mathf.Max(0, initialReserveAmmo));
+    }
+
+    private void Update()
+    {
+        if (combatRuntime != null && combatRuntime.TryCompleteReload(Time.time, out CombatResult result)) CombatResolved?.Invoke(result);
+    }
+
+    private void OnGUI()
+    {
+        if (!showAmmoDebugLabel) return;
+        PlayerModel player = GetComponentInParent<PlayerModel>();
+        Camera camera = Camera.main;
+        if (player == null || camera == null) return;
+        Vector3 screen = camera.WorldToScreenPoint(player.transform.position + Vector3.up * 2.1f);
+        if (screen.z <= 0f) return;
+        if (ammoDebugStyle == null) ammoDebugStyle = new GUIStyle(GUI.skin.label) { fontSize = 16, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleLeft };
+        Rect rect = new Rect(screen.x + 18f, Screen.height - screen.y - 12f, 150f, 28f);
+        Color previous = GUI.color;
+        GUI.color = new Color(0f, 0f, 0f, 0.65f);
+        GUI.Box(new Rect(rect.x - 4f, rect.y - 2f, rect.width, rect.height), GUIContent.none);
+        GUI.color = MagazineAmmo > 0 ? Color.white : new Color(1f, 0.45f, 0.45f);
+        GUI.Label(rect, $"{MagazineAmmo}/{MagazineAmmo + ReserveAmmo}{(IsReloading ? " 换弹中" : string.Empty)}", ammoDebugStyle);
+        GUI.color = previous;
+    }
 
     /// <summary>
     /// 朝着targetPos方向发射子弹
     /// </summary>
     /// <param name="targetPos"></param>
-    public void Fire(Vector3 targetPos)
+    public bool Fire(Vector3 targetPos)
     {
-        //检测发射间隔
-        if (Time.time - lastFireTime < bulletInterval)
-        {
-            return;
-        }
-        lastFireTime = Time.time;
+        if (combatRuntime == null) return false;
+        CombatResult result = combatRuntime.Resolve(new CombatRequest(++nextCombatRequestId, CombatIntentType.Fire, Time.time));
+        CombatResolved?.Invoke(result);
+        if (result.kind != CombatResultKind.FireAccepted) return false;
+        PlayVisualFire(targetPos);
+        return true;
+    }
+
+    /// <summary>PVP 预测/权威事件使用：只播放视觉，不在客户端扣弹。</summary>
+    public void PlayVisualFire(Vector3 targetPos)
+    {
         Fired?.Invoke();//广播开火（音效组件订阅）
         //计算发射方向
         Vector3 direction = targetPos - bulletSpawnPoint.position;
@@ -44,6 +94,7 @@ public class PlayerWeapon : MonoBehaviour
 
         //从对象池取出（或实例化）子弹并复位发射
         PlayerWeaponBullet bulletEffect = GetBullet();
+        bulletEffect.damage = weaponDamage;
         bulletEffect.ResetBullet(bulletSpawnPoint.position, direction);
 
         //枪口火花：走全局特效对象池（播完自动回池，替代每次 Instantiate）
@@ -51,6 +102,19 @@ public class PlayerWeapon : MonoBehaviour
 
         // 子弹轨迹（曳光）+ 击中墙体弹孔：一次射线确定视觉终点（与物理子弹同向，仅视觉表现）
         SpawnTracerAndHole(bulletSpawnPoint.position, direction);
+    }
+
+    public bool RequestReload()
+    {
+        if (combatRuntime == null) return false;
+        CombatResult result = combatRuntime.Resolve(new CombatRequest(++nextCombatRequestId, CombatIntentType.Reload, Time.time));
+        CombatResolved?.Invoke(result);
+        return result.kind == CombatResultKind.ReloadStarted;
+    }
+
+    public void ApplyAuthoritativeAmmo(int magazineAmmo, int reserveAmmo, bool isReloading)
+    {
+        combatRuntime?.ApplyAuthoritativeState(magazineAmmo, reserveAmmo, isReloading);
     }
 
     /// <summary>

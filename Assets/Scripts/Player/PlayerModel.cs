@@ -154,7 +154,8 @@ public class PlayerModel : MonoBehaviour,IStateMachineOwner
         animator = GetComponent<Animator>();
         cc = GetComponent<CharacterController>();
         navMeshAgent=GetComponent<NavMeshAgent>();
-        navMeshAgent.stoppingDistance = stoppingDistance;
+        if (navMeshAgent != null)
+            navMeshAgent.stoppingDistance = stoppingDistance;
         currentHealth = maxHealth;//初始化生命值
         // FPS 式移动：位移全由代码（LateUpdate）驱动。
         // ⚠️ Apply Root Motion 必须保持【开启】：Animation Rigging 的约束（TwoBoneIK/MultiAim）依赖它才求值
@@ -170,7 +171,7 @@ public class PlayerModel : MonoBehaviour,IStateMachineOwner
     void Start()
     {
         // angularSpeed 依赖 PlayerController.INSTANCE，延迟到 Start 赋值（此时所有 Awake 已执行完毕）；PVP 场景无 PlayerController，判空兜底
-        if (PlayerController.INSTANCE != null)
+        if (PlayerController.INSTANCE != null && navMeshAgent != null)
             navMeshAgent.angularSpeed = PlayerController.INSTANCE.rotationSpeed;
         // PVP 网络玩家（disableStateMachine）：状态机/位移由 PvPMotor 接管，跳过状态机启动
         if (!disableStateMachine)

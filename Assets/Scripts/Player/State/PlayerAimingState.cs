@@ -56,8 +56,8 @@ public class PlayerAimingState : PlayerStateBase
             {
                 if (playerModel.weapon != null)
                 {
-                    playerModel.weapon.Fire(playerController.AimTarget.position);
-                    playerController.ShakeCamera();//屏幕抖动
+                    if (playerModel.weapon.Fire(playerController.AimTarget.position))
+                        playerController.ShakeCamera();//只在规则层接受开火后播放镜头反馈
                 }
                 else
                 {

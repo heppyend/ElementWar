@@ -1,3 +1,5 @@
+using ElementWar.Combat;
+
 namespace ElementWar.Server;
 
 // ============================================================
@@ -24,6 +26,9 @@ public sealed class GameWorldSettings
     public int FireDamage = 25;
     public int BotFireDamage = 0;                // 训练 Bot 只用于同步验证，不扣真人血量
     public float FireCooldownSeconds = 0.15f;   // 与客户端视觉射速一致（PVE bulletInterval=0.15s），否则视觉 6.67 发/秒只有 1/5 结算
+    public int WeaponMagazineCapacity = 30;
+    public int WeaponReserveAmmo = 90;
+    public float ReloadDurationSeconds = 1.5f;
     public float RespawnSeconds = 3f;
     public float FireRange = 35f;
     public float HitRadius = 1.2f;
@@ -38,6 +43,7 @@ public sealed class GameWorldSettings
     public float MaxLagCompRewindSeconds = 0.35f;
     public int WinScore = 5;
     public float ArenaHalfExtent = 40f;        // 简单边界钳制（XZ），防跑出竞技场
+    public float CollisionRadius = 0.4f;       // PVP 角色水平圆形碰撞半径
     // ---- 训练 bot ----
     public bool EnableBots = false;            // 默认关闭（单人纯测试）；`--bots` 开训练模式补位
     public string BotName = "训练Bot";
@@ -76,6 +82,7 @@ public sealed class ServerPlayer
     public int RespawnServerTick;
     public int LastProcessedInputTick;
     public int LastQueuedFireSequence;
+    public int LastQueuedReloadSequence;
     public int NextAllowedFireServerTick;
     public float SpeedBlend;
     public int MoveState;                       // 0 idle 1 move 2 sprint 3 aim 4 hover
@@ -87,6 +94,8 @@ public sealed class ServerPlayer
     public float GroundY = 0.05f;               // 每角色脚底偏移（角色原点≠脚底，且角色间不同：荧0.025/芙宁娜0.15）
     public readonly SortedDictionary<int, PlayerInputMessage> PendingInputs = new();
     public readonly SortedDictionary<int, FireRequestMessage> PendingFires = new();
+    public ReloadRequestMessage? PendingReload;
+    public WeaponRuntime Weapon = null!;
     public readonly List<HistoryFrame> History = new();
     public float NoInputTicks;                  // 距上次输入经过的 tick 数（key-up 超时）
     public PlayerInputMessage? LastInput;       // 最近一次输入（供 key-up 丢失时短窗口复用）
@@ -119,11 +128,16 @@ public sealed class GameWorld
     private int _nextPlayerId = 1;      // 人类 id：始终 1、2、3…（bot 用独立负数 id，不占人类序号）
     private int _nextBotId = -1;        // bot id：-1、-2…（避免计分板/出生点被 bot 抢走 id 2）
     private static readonly Random BotRand = new(20260820);
+    private readonly ArenaCollisionWorld _collision;
 
     /// <summary>诊断输出回调（由宿主 UdpGameServer 接 Console），GameWorld 本身保持零 IO。</summary>
     public Action<string>? Log;
 
-    public GameWorld(GameWorldSettings settings) => Settings = settings;
+    public GameWorld(GameWorldSettings settings)
+    {
+        Settings = settings;
+        _collision = new ArenaCollisionWorld(settings.CollisionRadius, settings.ArenaHalfExtent);
+    }
 
     public IReadOnlyDictionary<int, ServerPlayer> Players => _players;
     public int PlayerCount => _players.Count;
@@ -149,6 +163,7 @@ public sealed class GameWorld
             Health = Settings.MaxHealth,
             MaxHealth = Settings.MaxHealth,
             LastProcessedInputTick = ServerTick,
+            Weapon = new WeaponRuntime(new WeaponDefinition(Settings.WeaponMagazineCapacity, Settings.FireDamage, Settings.FireCooldownSeconds, Settings.ReloadDurationSeconds), Settings.WeaponMagazineCapacity, Settings.WeaponReserveAmmo),
         };
         // 出生点：玩家按 id 交替分到对称位置；Y 用该角色脚底偏移
         p.GroundY = GetGroundY(characterId);
@@ -288,6 +303,14 @@ public sealed class GameWorld
         return true;
     }
 
+    public bool TryQueueReload(int playerId, ReloadRequestMessage msg)
+    {
+        if (!_players.TryGetValue(playerId, out var p) || !p.IsAlive) return false;
+        if (msg.ReloadSequence <= p.LastQueuedReloadSequence) return false;
+        p.PendingReload = msg;
+        return true;
+    }
+
     // ---------------- Tick 模拟 ----------------
 
     public void StepFrame(float dt)
@@ -296,6 +319,10 @@ public sealed class GameWorld
         PendingReliableEvents.Clear();
         PendingHits.Clear();
         PendingShots.Clear();
+
+        // 对局结束后保持终局状态，不再继续移动、重生或处理开火；新玩家加入时
+        // AddPlayer 会清除 MatchEnded 并开启下一局。
+        if (MatchEnded) return;
 
         // ① 重生
         foreach (var p in _players.Values)
@@ -316,13 +343,24 @@ public sealed class GameWorld
                     SimulatePlayer(p, input, dt);
                 }
             }
-            StoreHistory(p);
         }
+
+        // 所有玩家先完成本 tick 的自主移动，再以确定性顺序解算互相阻挡/推挤。
+        _collision.ResolvePlayerPush(_players.Values.Where(p => p.IsAlive).ToList());
+        foreach (var p in _players.Values)
+            if (p.IsAlive)
+            {
+                p.Position = _collision.ResolveMovement(p.Position, p.Position, p.GroundY);
+                StoreHistory(p);
+            }
+            else StoreHistory(p);
 
         // ③ 处理开火（人类按 FireRequest，bot 按 AI 决策）
         foreach (var p in _players.Values)
         {
             if (!p.IsAlive) continue;
+            p.Weapon.TryCompleteReload(ServerTick / (float)Settings.ServerTickRate, out _);
+            ResolveReload(p);
             if (p.IsBot) ResolveBotFire(p);
             else ResolveFires(p);
         }
@@ -457,10 +495,7 @@ public sealed class GameWorld
         }
 
         // 竞技场边界钳制（XZ）
-        newPos = new Vec3(
-            Math.Clamp(newPos.X, -Settings.ArenaHalfExtent, Settings.ArenaHalfExtent),
-            newPos.Y,
-            Math.Clamp(newPos.Z, -Settings.ArenaHalfExtent, Settings.ArenaHalfExtent));
+        newPos = _collision.ResolveMovement(p.Position, newPos, p.GroundY);
 
         p.Position = newPos;
         p.IsGrounded = newPos.Y <= p.GroundY + 0.001f;
@@ -497,10 +532,7 @@ public sealed class GameWorld
         if (p.SlideSprintBoost) speed += Settings.SprintSlideBoost * t;
 
         Vec3 delta = p.SlideDirection * (speed * dt);
-        Vec3 newPos = new Vec3(
-            Math.Clamp(p.Position.X + delta.X, -Settings.ArenaHalfExtent, Settings.ArenaHalfExtent),
-            p.GroundY,
-            Math.Clamp(p.Position.Z + delta.Z, -Settings.ArenaHalfExtent, Settings.ArenaHalfExtent));
+        Vec3 newPos = _collision.ResolveMovement(p.Position, new Vec3(p.Position.X + delta.X, p.GroundY, p.Position.Z + delta.Z), p.GroundY);
 
         p.Position = newPos;
         p.VerticalSpeed = 0f;
@@ -635,13 +667,13 @@ public sealed class GameWorld
     private void ResolveFires(ServerPlayer p)
     {
         if (p.PendingFires.Count == 0) return;
-        if (ServerTick < p.NextAllowedFireServerTick) return; // 冷却中
 
         // 取最新一次开火请求
         var fire = p.PendingFires.Last().Value;
         p.PendingFires.Clear();
         p.LastQueuedFireSequence = fire.FireSequence;
-        p.NextAllowedFireServerTick = ServerTick + (int)Math.Round(Settings.FireCooldownSeconds * Settings.ServerTickRate);
+        CombatResult result = p.Weapon.Resolve(new CombatRequest(fire.FireSequence, CombatIntentType.Fire, ServerTick / (float)Settings.ServerTickRate));
+        if (result.kind != CombatResultKind.FireAccepted) return;
 
         // 射线（视线从脚底 +EyeHeight；原点在该角色 GroundY 之上，故减去）
         Vec3 origin = new(p.Position.X, p.Position.Y + (Settings.EyeHeight - p.GroundY), p.Position.Z);
@@ -656,6 +688,15 @@ public sealed class GameWorld
         ResolveShot(p, origin, aimDir, rewind, Settings.FireDamage);
     }
 
+    private void ResolveReload(ServerPlayer p)
+    {
+        if (p.PendingReload is null) return;
+        ReloadRequestMessage reload = p.PendingReload;
+        p.PendingReload = null;
+        p.LastQueuedReloadSequence = reload.ReloadSequence;
+        p.Weapon.Resolve(new CombatRequest(reload.ReloadSequence, CombatIntentType.Reload, ServerTick / (float)Settings.ServerTickRate));
+    }
+
     /// <summary>共享命中结算：射线 vs 全体其他玩家（历史帧胶囊，延迟补偿）+ 伤害。人类与 bot 共用。</summary>
     private void ResolveShot(ServerPlayer p, Vec3 origin, Vec3 aimDir, float rewindSeconds, int damage)
     {
@@ -664,6 +705,8 @@ public sealed class GameWorld
         // 找最近命中
         int? bestTarget = null;
         float bestDist = Settings.FireRange;
+        if (_collision.RaycastWalls(origin, aimDir, Settings.FireRange, out float wallDist))
+            bestDist = wallDist;
         Vec3 bestHit = origin;
 
         foreach (var other in _players.Values)
@@ -759,6 +802,14 @@ public sealed class GameWorld
 
     private void ApplyDamage(ServerPlayer shooter, ServerPlayer target, Vec3 hit, int damage)
     {
+        // 训练 bot 默认只验证瞄准/同步，不对真人造成伤害；单独记录，避免日志看起来像
+        // “命中但 HP 没变”的异常。
+        if (damage <= 0)
+        {
+            Console.WriteLine($"[训练] 命中: P{shooter.PlayerId} → P{target.PlayerId}（Bot伤害=0，目标HP保持 {Math.Max(0, target.Health)}）");
+            return;
+        }
+
         target.Health -= damage;
         target.RecentlyHit = true;
         PendingHits.Add((shooter.PlayerId, target.PlayerId, hit, damage));
@@ -817,6 +868,7 @@ public sealed class GameWorld
         p.LastProcessedInputTick = ServerTick;
         p.LastInput = null;
         p.NoInputTicks = 0;
+        p.Weapon = new WeaponRuntime(new WeaponDefinition(Settings.WeaponMagazineCapacity, Settings.FireDamage, Settings.FireCooldownSeconds, Settings.ReloadDurationSeconds), Settings.WeaponMagazineCapacity, Settings.WeaponReserveAmmo);
         PendingReliableEvents.Add(new RespawnEvent(p.PlayerId, p.LifeStateVersion, p.Position, p.Health, p.MaxHealth));
     }
 

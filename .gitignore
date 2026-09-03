@@ -51,6 +51,8 @@ _Diagnostics_*.txt
 # 源代码与工程文件必须提交（否则新机器 dotnet run 起不来）；bin/obj 编译产物忽略
 Server/bin/
 Server/obj/
+Server/tmpbuild*/
+Server/Server/
 !Server/ElementWarServer.csproj
 !Server/ElementWarServer.sln
 

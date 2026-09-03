@@ -99,18 +99,15 @@ public class EffectPool : SingleMonoBase<EffectPool>
         // - 未配置 stopAction 时靠 IsAlive() 判断播放是否结束
         float timeout = 10f;
         float timer = 0f;
-        bool done = false;
         while (effect != null && timer < timeout)
         {
             timer += Time.deltaTime;
             if (!effect.activeSelf)
             {
-                done = true;//已被 stopAction 自动禁用
                 break;
             }
             if (ps != null && !ps.IsAlive() && ps.isPlaying == false)
             {
-                done = true;//粒子播完且停止
                 break;
             }
             yield return null;

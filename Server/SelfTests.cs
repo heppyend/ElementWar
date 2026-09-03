@@ -10,7 +10,26 @@ public static class SelfTests
         InputsWaitForMissingSequence();
         EveryAcceptedFireCreatesShotEvent();
         ReliableLedgerHonorsResendInterval();
-        Console.WriteLine("[SelfTest] 5/5 passed");
+        CollisionStopsAtCover();
+        PlayersAreSeparatedAndWallsBlockShots();
+        JumpSurvivesCollisionResolution();
+        AuthoritativeAmmoReloadsFromIntent();
+        Console.WriteLine("[SelfTest] 9/9 passed");
+    }
+
+    private static void AuthoritativeAmmoReloadsFromIntent()
+    {
+        var settings = new GameWorldSettings { WeaponMagazineCapacity = 2, WeaponReserveAmmo = 3, ReloadDurationSeconds = 0.1f };
+        var world = new GameWorld(settings);
+        var player = world.AddPlayer("P1", 0);
+        Assert(world.TryQueueFire(player.PlayerId, new FireRequestMessage { FireSequence = 1, AimY = 1.5f, AimZ = -20f }), "fire intent should queue");
+        world.StepFrame(1f / settings.ServerTickRate);
+        Assert(player.Weapon.MagazineAmmo == 1, "server must consume authoritative ammo on accepted fire");
+        Assert(world.TryQueueReload(player.PlayerId, new ReloadRequestMessage { ReloadSequence = 1 }), "reload intent should queue");
+        world.StepFrame(1f / settings.ServerTickRate);
+        Assert(player.Weapon.IsReloading, "server must enter reloading after accepted reload intent");
+        for (int i = 0; i < 8; i++) world.StepFrame(1f / settings.ServerTickRate);
+        Assert(player.Weapon.MagazineAmmo == 2 && player.Weapon.ReserveAmmo == 2 && !player.Weapon.IsReloading, "server must complete reload with reserve transfer");
     }
 
     private static void SpawnContractMatchesSceneOrder()
@@ -95,6 +114,34 @@ public static class SelfTests
         var due = ledger.CollectDueResends(t0.AddMilliseconds(250)).ToArray();
         Assert(due.Length == 1 && due[0].eventId == 7, "must resend once at interval");
         Assert(ledger.Acknowledge(7) && ledger.PendingCount == 0, "ack should clear pending event");
+    }
+
+    private static void CollisionStopsAtCover()
+    {
+        var collision = new ArenaCollisionWorld(0.4f, 40f);
+        var end = collision.ResolveMovement(new Vec3(0f, 0.025f, 10f), new Vec3(0f, 0.025f, 14f), 0.025f);
+        Assert(end.Z <= 11.1001f, $"cover collision failed: {end}");
+    }
+
+    private static void PlayersAreSeparatedAndWallsBlockShots()
+    {
+        var collision = new ArenaCollisionWorld(0.4f, 40f);
+        var a = new ServerPlayer { PlayerId = 1, IsAlive = true, GroundY = 0.025f, Position = new Vec3(0f, 0.025f, 10f) };
+        var b = new ServerPlayer { PlayerId = 2, IsAlive = true, GroundY = 0.025f, Position = new Vec3(0.5f, 0.025f, 10f) };
+        collision.ResolvePlayerPush(new List<ServerPlayer> { a, b });
+        Assert(Vec3.Distance(a.Position, b.Position) >= 0.799f, "players must not overlap after push");
+        Assert(collision.RaycastWalls(new Vec3(0f, 1.5f, 0f), new Vec3(0f, 0f, 1f), 35f, out float wall)
+            && wall > 11f && wall < 12f, "wall raycast should hit Cover_0");
+    }
+
+    private static void JumpSurvivesCollisionResolution()
+    {
+        var settings = new GameWorldSettings();
+        var world = new GameWorld(settings);
+        var player = world.AddPlayer("P1", 0);
+        Assert(world.TryQueueInput(player.PlayerId, new PlayerInputMessage { InputTick = 1, IsJumping = true }), "jump input should be accepted");
+        world.StepFrame(1f / settings.ServerTickRate);
+        Assert(player.Position.Y > player.GroundY, "collision resolution must not reset jump height");
     }
 
     private static void AssertNear(float actual, float expected, string name)

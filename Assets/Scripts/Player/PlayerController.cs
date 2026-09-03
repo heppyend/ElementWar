@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Animations.Rigging;
+using UnityEngine.InputSystem;
 
 /// <summary>
 /// 玩家控制器
@@ -34,6 +35,8 @@ public class PlayerController : SingleMonoBase<PlayerController>
     public bool isFire;//开火输入
     [HideInInspector]
     public bool isSlide;//滑铲输入
+    [HideInInspector]
+    public bool isReload;//换弹输入（一次性）
     #endregion
 
     #region 瞄准相关
@@ -101,6 +104,7 @@ public class PlayerController : SingleMonoBase<PlayerController>
         isJumping = input.Player.IsJumping.triggered;
         isFire=input.Player.Fire.IsPressed();
         isSlide = input.Player.IsSlide.triggered;//单击触发一次滑铲（避免长按循环触发）
+        isReload = Keyboard.current != null && Keyboard.current.rKey.wasPressedThisFrame;
         #endregion
 
         #region 计算玩家移动方向
@@ -111,6 +115,9 @@ public class PlayerController : SingleMonoBase<PlayerController>
         //将世界空间下的方向向量转换为模型本地空间下的方向向量
         localMovement = currentPlayerModel.transform.InverseTransformVector(worldMovement);
         #endregion
+
+        if (isReload && currentPlayerModel != null && currentPlayerModel.weapon != null)
+            currentPlayerModel.weapon.RequestReload();
 
         #region 切换角色输入监听
         if (input.Player.First.triggered)

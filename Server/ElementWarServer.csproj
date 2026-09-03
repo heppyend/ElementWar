@@ -9,4 +9,8 @@
     <RootNamespace>ElementWar.Server</RootNamespace>
   </PropertyGroup>
 
+  <ItemGroup>
+    <Compile Include="..\Assets\Scripts\Gameplay\Combat\Core\CombatCore.cs" Link="Combat\CombatCore.cs" />
+  </ItemGroup>
+
 </Project>

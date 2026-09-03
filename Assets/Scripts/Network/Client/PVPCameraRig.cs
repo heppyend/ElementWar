@@ -31,6 +31,14 @@ namespace ElementWar.Net
         public Vector3 normalLookOffset = new Vector3(0f, 1.15f, 0f);   // 胸口
         public Vector3 aimLookOffset = new Vector3(0.3f, 1.15f, 0f);    // 右肩（向右偏一点）
 
+        [Header("相机墙体保护")]
+        [Tooltip("相机与角色之间用于遮挡检测的碰撞层。默认检测所有层，并自动忽略本地角色自身碰撞体。")]
+        public LayerMask cameraCollisionMask = ~0;
+        [Tooltip("相机碰撞球半径，避免镜头贴进墙体。")]
+        [Min(0.01f)] public float cameraCollisionRadius = 0.12f;
+        [Tooltip("相机离视线锚点的最小距离。")]
+        [Min(0.05f)] public float cameraMinimumDistance = 0.25f;
+
         private CinemachineFreeLook _normal;
         private CinemachineFreeLook _aim;
         private Transform _target;
@@ -46,6 +54,8 @@ namespace ElementWar.Net
         /// ⚠️ 不能与普通视角共用 _yAxis：前置镜头抬到人物上方时，瞄准镜头也会跟着到上方 → 不是右肩镜头。</summary>
         private const float AimShoulderY = 0.5f;
 
+        private readonly RaycastHit[] _cameraHits = new RaycastHit[16];
+
         private void Awake()
         {
             // 清理旧简化相机（场景 wizard 可能已挂过），避免与 CinemachineBrain 打架
@@ -55,14 +65,15 @@ namespace ElementWar.Net
             // 确保 Main Camera 有 CinemachineBrain（FreeLook 依赖它驱动相机）
             if (Camera.main != null && Camera.main.GetComponent<CinemachineBrain>() == null)
                 Camera.main.gameObject.AddComponent<CinemachineBrain>();
-            // 瞄准切换要快：默认混合时长压到 0.15s（否则 FreeLook 切换约 2s 慢慢拉，瞄准感迟钝）
+            // PVP 瞄准切换使用 EaseInOut：两端平缓、中段较快，降低肩射视角切换的晃动感。
             if (Camera.main != null)
             {
                 var brain = Camera.main.GetComponent<CinemachineBrain>();
                 if (brain != null)
                 {
                     var def = brain.m_DefaultBlend;
-                    def.m_Time = 0.15f;
+                    def.m_Style = CinemachineBlendDefinition.Style.EaseInOut;
+                    def.m_Time = 0.32f;
                     brain.m_DefaultBlend = def;
                 }
             }
@@ -87,6 +98,16 @@ namespace ElementWar.Net
             _aim.gameObject.AddComponent<CinemachineImpulseListener>();
         }
 
+        private void OnEnable()
+        {
+            CinemachineCore.CameraUpdatedEvent.AddListener(OnCinemachineCameraUpdated);
+        }
+
+        private void OnDisable()
+        {
+            CinemachineCore.CameraUpdatedEvent.RemoveListener(OnCinemachineCameraUpdated);
+        }
+
         /// <summary>开火/受击相机震动（NetClient 调用）。</summary>
         public void ShakeCamera()
         {
@@ -96,6 +117,7 @@ namespace ElementWar.Net
         private void Update()
         {
             var net = FindObjectOfType<NetClient>();
+            if (net != null && net.MatchEnded) return;
             if (net != null && net.LocalModel != null && net.LocalModel.transform != _target)
             {
                 _target = net.LocalModel.transform;
@@ -116,10 +138,13 @@ namespace ElementWar.Net
             }
             if (_target == null) return;
 
+            // 先确定当前模式，再写入轨道轴，避免退出瞄准时多保留一帧瞄准相机状态。
+            bool aiming = net != null && net.LocalMotor != null && (net.LocalMotor.isAiming || net.LocalMotor.isFire);
+
             // 鼠标转视角（与 PVE FreeLook 手感一致：上移抬高相机，下移压低）
             var delta = Mouse.current != null ? Mouse.current.delta.ReadValue() : Vector2.zero;
             _xAxis += delta.x * mouseSensitivity;
-            if (_aiming)
+            if (aiming)
             {
                 // 瞄准：俯仰相对右肩基线小幅调整（默认 0 = 固定右肩镜头，不继承普通视角的高低轨道）
                 _aimPitch = Mathf.Clamp(_aimPitch - delta.y * mouseSensitivity * 0.001f, -0.25f, 0.35f);
@@ -132,16 +157,65 @@ namespace ElementWar.Net
             _normal.m_YAxis.Value = _yAxis;
             _aim.m_XAxis.Value = _xAxis;
             // ⚠️ 瞄准用右肩轨道（AimShoulderY=0.5 → 中段=右肩高度）+ 微调俯仰；若共用 _yAxis，前置镜头抬高时瞄准镜头不是右肩
-            _aim.m_YAxis.Value = _aiming ? AimShoulderY + _aimPitch : _yAxis;
+            _aim.m_YAxis.Value = aiming ? AimShoulderY + _aimPitch : _yAxis;
 
-            // 瞄准切换（按 isAiming / isFire，与 PVE PlayerStateBase 一致）
-            bool aiming = net != null && net.LocalMotor != null && (net.LocalMotor.isAiming || net.LocalMotor.isFire);
             if (aiming != _aiming)
             {
                 _aiming = aiming;
                 if (aiming) _aimPitch = 0f;   // 进入瞄准：从右肩基线开始
                 _normal.Priority = aiming ? 0 : 100;
                 _aim.Priority = aiming ? 100 : 0;
+
+                // FreeLook/Collider 可能缓存上一模式的阻挡位置；切换时让管线重新计算，
+                // 防止镜头从墙体前推位置“粘住”，退出瞄准后仍保持近距离/固定视角。
+                _normal.PreviousStateIsValid = false;
+                _aim.PreviousStateIsValid = false;
+            }
+        }
+
+        /// <summary>
+        /// CinemachineBrain 完成当前帧相机计算后，修正角色与镜头之间的墙体遮挡。
+        /// 只改变 Main Camera 的最终位置，不改 FreeLook 轨道参数；遮挡解除后下一帧会自动回到原轨道。
+        /// </summary>
+        private void OnCinemachineCameraUpdated(CinemachineBrain brain)
+        {
+            if (brain == null || _target == null || Camera.main == null) return;
+            var active = brain.ActiveVirtualCamera;
+            // ActiveVirtualCamera 是接口类型，直接与 UnityEngine.Object 比较会触发 CS0252；
+            // 转成 Unity 对象后使用 Unity 的空对象/销毁对象语义进行比较。
+            var activeObject = active as UnityEngine.Object;
+            if (activeObject != _normal && activeObject != _aim) return;
+
+            Vector3 lookAt = (_aiming ? _aimLook : _normalLook) != null
+                ? (_aiming ? _aimLook : _normalLook).position
+                : _target.position + (_aiming ? aimLookOffset : normalLookOffset);
+            Vector3 cameraPos = Camera.main.transform.position;
+            Vector3 toCamera = cameraPos - lookAt;
+            float distance = toCamera.magnitude;
+            if (distance <= cameraMinimumDistance) return;
+
+            Vector3 direction = toCamera / distance;
+            int hitCount = Physics.SphereCastNonAlloc(
+                lookAt,
+                cameraCollisionRadius,
+                direction,
+                _cameraHits,
+                distance,
+                cameraCollisionMask,
+                QueryTriggerInteraction.Ignore);
+
+            float nearest = distance;
+            for (int i = 0; i < hitCount; i++)
+            {
+                var hit = _cameraHits[i];
+                if (hit.collider == null || hit.collider.transform.root == _target) continue;
+                if (hit.distance < nearest) nearest = hit.distance;
+            }
+
+            if (nearest < distance)
+            {
+                float safeDistance = Mathf.Max(cameraMinimumDistance, nearest - cameraCollisionRadius);
+                Camera.main.transform.position = lookAt + direction * safeDistance;
             }
         }
 

@@ -16,6 +16,7 @@ namespace ElementWar.Net
         public const string InputBatch = "inputBatch";
         public const string Fire = "fire";
         public const string FireReceipt = "fireReceipt";
+        public const string Reload = "reload";
         public const string Ping = "ping";
         public const string Pong = "pong";
         public const string Snapshot = "snapshot";
@@ -44,6 +45,7 @@ namespace ElementWar.Net
         public int serverTickRate;
         public int winScore;
         public int serverTick;
+        public string sessionId = "";
     }
 
     [Serializable] public class PlayerInputMessage
@@ -86,6 +88,14 @@ namespace ElementWar.Net
         public int serverTick;
     }
 
+    [Serializable] public class ReloadRequestMessage
+    {
+        public string type = Msg.Reload;
+        public int playerId;
+        public int reloadSequence;
+        public int requestTick;
+    }
+
     [Serializable] public class PingMessage
     {
         public string type = Msg.Ping;
@@ -122,6 +132,9 @@ namespace ElementWar.Net
         public float slideDirectionX, slideDirectionY, slideDirectionZ;
         public bool slideSprintBoost;
         public int score;
+        public int magazineAmmo;
+        public int reserveAmmo;
+        public bool isReloading;
     }
 
     [Serializable] public class ShotEventMessage

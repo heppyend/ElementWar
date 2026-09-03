@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Animations.Rigging;
 using UnityEngine.SceneManagement;
+using UnityEngine.InputSystem;
 
 namespace ElementWar.Net
 {
@@ -13,6 +14,11 @@ namespace ElementWar.Net
     /// </summary>
     public class NetClient : MonoBehaviour
     {
+        private const float PvpInterpolationDelaySeconds = 0.05f;
+        private const float SettlementPlaybackDuration = 3.5f;
+        private const float SettlementPlaybackScale = 0.2f;
+        // 网络模拟是 60Hz；PVP 统一 120FPS，避免两端被各自显示器刷新率/vSync 拉到不同节奏。
+        private const int PvpTargetFrameRate = 120;
         [Header("连接")]
         [SerializeField] string serverAddress = "127.0.0.1";
         [SerializeField] int serverPort = 7777;
@@ -28,12 +34,15 @@ namespace ElementWar.Net
         // ---- 运行时状态 ----
         private UdpSocket _socket;
         private bool _connected;
+        private bool _matchEnded;
         private int _playerId;
         private int _serverTickRate = 60;
+        private string _serverSessionId = "";
         private int _winScore = 5;
         private int _inputTick;
         private int _lastServerTick;   // 最近快照的服务器 tick（inputTick 对齐用，防漂移被服务器拒绝）
         private int _fireSequence;
+        private int _reloadSequence;
         private float _inputAccumulator;
         private float _estimatedRtt;
         private float _nextHelloTime;
@@ -51,6 +60,10 @@ namespace ElementWar.Net
         private PVPCameraRig _camRig;                  // 相机震动（懒查找缓存）
         private float _jumpHoldUntil;   // 跳跃锁存截止时间（时间制，跨渲染帧可靠）
         private float _slideHoldUntil;  // 滑铲锁存截止时间（同上）
+        private int _previousTargetFrameRate;
+        private int _previousVSyncCount;
+        private bool _framePacingApplied;
+        private bool _goodbyeSent;
 
         private MyInputSystem _input;
         private Camera _mainCamera;
@@ -64,7 +77,7 @@ namespace ElementWar.Net
 
         // 输入采样（每帧更新，供 PvPMotor 与上报共用）
         private Vector2 _moveInput;
-        private bool _sprint, _aiming, _fire, _jumping, _slide;
+        private bool _sprint, _aiming, _fire, _jumping, _slide, _reload;
         private Vector3 _worldMove;
         private Vector3 _aimPoint = new Vector3(0f, 1.5f, 10f);
 
@@ -81,6 +94,11 @@ namespace ElementWar.Net
         public int PendingInputCount => _pendingInputs.Count;
         public int RejectedFireCount => _rejectedFireCount;
         public int LastServerTick => _lastServerTick;
+        public int ServerTickRate => _serverTickRate;
+        public string ServerSessionId => _serverSessionId;
+        public int InputTick => _inputTick;
+        public int LastSnapshotSequence => _lastSnapshotSequence;
+        public bool MatchEnded => _matchEnded;
 
         /// <summary>计分板：playerId → score（由快照更新，PVPHealthUI 读取）。</summary>
         public readonly Dictionary<int, int> Scores = new();
@@ -93,6 +111,7 @@ namespace ElementWar.Net
 
         private void Awake()
         {
+            ApplyPvpFramePacing();
             _input = new MyInputSystem();
             _mainCamera = Camera.main;
             // 兜底：确保左上角信息窗存在（NetworkLauncher 可能因组件缺失提前 return 没创建）
@@ -102,7 +121,30 @@ namespace ElementWar.Net
 
         private void OnEnable() { _input.Enable(); }
         private void OnDisable() { _input?.Disable(); }
-        private void OnDestroy() { _socket?.Dispose(); }
+        private void OnDestroy()
+        {
+            DisconnectGracefully();
+            _socket?.Dispose();
+            RestoreFramePacing();
+        }
+
+        private void ApplyPvpFramePacing()
+        {
+            if (_framePacingApplied) return;
+            _previousTargetFrameRate = Application.targetFrameRate;
+            _previousVSyncCount = QualitySettings.vSyncCount;
+            QualitySettings.vSyncCount = 0;
+            Application.targetFrameRate = PvpTargetFrameRate;
+            _framePacingApplied = true;
+        }
+
+        private void RestoreFramePacing()
+        {
+            if (!_framePacingApplied) return;
+            Application.targetFrameRate = _previousTargetFrameRate;
+            QualitySettings.vSyncCount = _previousVSyncCount;
+            _framePacingApplied = false;
+        }
 
         /// <summary>配置连接参数（由 NetworkLauncher 从 NetLobbyConfig 注入）。</summary>
         public void Configure(string ip, int port, string name, int charId)
@@ -118,6 +160,7 @@ namespace ElementWar.Net
         {
             try
             {
+                _goodbyeSent = false;
                 _socket = new UdpSocket(serverAddress, serverPort);
                 SendHello();
                 Debug.Log($"[NetClient] 连接 {serverAddress}:{serverPort} 等待 welcome...");
@@ -138,6 +181,9 @@ namespace ElementWar.Net
                 if (Time.unscaledTime >= _nextHelloTime) SendHello();
                 return;
             }
+
+            // 终局面板显示后停止继续采样/发送输入，避免后台相机和网络状态继续变化。
+            if (_matchEnded) return;
 
             SampleInput();
             if (_localMotor != null) PushInputToMotor();
@@ -165,6 +211,8 @@ namespace ElementWar.Net
             {
                 SendFire();
             }
+            if (_reload && _localModel != null && !_localModel.isDead)
+                SendReload();
         }
 
         // ---------------- 输入采样 ----------------
@@ -176,6 +224,7 @@ namespace ElementWar.Net
             _sprint = _input.Player.IsSprint.IsPressed();
             _aiming = _input.Player.IsAiming.IsPressed();
             _fire = _input.Player.Fire.IsPressed();
+            _reload = Keyboard.current != null && Keyboard.current.rKey.wasPressedThisFrame;
             if (_input.Player.IsJumping.triggered) _jumpHoldUntil = Time.time + 0.12f;
             _jumping = _jumpHoldUntil > Time.time;
             if (_input.Player.IsSlide.triggered) _slideHoldUntil = Time.time + 0.12f;
@@ -260,10 +309,13 @@ namespace ElementWar.Net
                 aimY = _aimPoint.y,
                 aimZ = _aimPoint.z,
                 estimatedRttSeconds = _estimatedRtt,
-                interpolationDelaySeconds = 0.1f,
+                interpolationDelaySeconds = PvpInterpolationDelaySeconds,
             };
             if (_localMotor != null)
+            {
+                RefreshLocalDynamicCollision();
                 _localMotor.SimulateTick(msg, tickDelta, _serverTickRate);
+            }
             _pendingInputs[_inputTick] = msg;
 
             // 每包带“最早两个未确认命令 + 当前命令”：不扩大单包到 MTU 以上，
@@ -320,7 +372,7 @@ namespace ElementWar.Net
                 aimY = _aimPoint.y,
                 aimZ = _aimPoint.z,
                 estimatedRttSeconds = _estimatedRtt,
-                interpolationDelaySeconds = 0.1f,
+                interpolationDelaySeconds = PvpInterpolationDelaySeconds,
             };
             _socket.SendJson(JsonUtility.ToJson(msg));
 
@@ -329,11 +381,22 @@ namespace ElementWar.Net
             // 视觉子弹对玩家无效（只对 Enemy 标签结算，PVP 场景无 Enemy）。
             if (_localModel != null && _localModel.weapon != null)
             {
-                _localModel.weapon.Fire(_aimPoint);
+                _localModel.weapon.PlayVisualFire(_aimPoint);
             }
             // 开火相机震动（与 PVE PlayerAimingState.ShakeCamera 对应）
             if (_camRig == null) _camRig = FindObjectOfType<PVPCameraRig>();
             if (_camRig != null) _camRig.ShakeCamera();
+        }
+
+        private void SendReload()
+        {
+            _reloadSequence++;
+            _socket.SendJson(JsonUtility.ToJson(new ReloadRequestMessage
+            {
+                playerId = _playerId,
+                reloadSequence = _reloadSequence,
+                requestTick = _inputTick,
+            }));
         }
 
         private void SendAck(long eventId)
@@ -405,6 +468,7 @@ namespace ElementWar.Net
             if (_connected && _playerId == w.playerId) return;
             _playerId = w.playerId;
             _serverTickRate = w.serverTickRate;
+            _serverSessionId = w.sessionId ?? "";
             _winScore = w.winScore;
             _inputTick = w.serverTick; // 对齐服务器 tick，避免输入被判太旧
             _lastServerTick = w.serverTick;
@@ -526,6 +590,8 @@ namespace ElementWar.Net
                 if (ps.playerId == _playerId)
                 {
                     ReconcileLocal(ps);
+                    if (_localModel != null && _localModel.weapon != null)
+                        _localModel.weapon.ApplyAuthoritativeAmmo(ps.magazineAmmo, ps.reserveAmmo, ps.isReloading);
                 }
                 else
                 {
@@ -537,6 +603,7 @@ namespace ElementWar.Net
                     {
                         av.ApplyPlayerState(ps, snap.serverTick);
                         av.ApplyHealth(ps.health, ps.maxHealth);
+                        av.ApplyAmmo(ps.magazineAmmo, ps.reserveAmmo, ps.isReloading);
                     }
                 }
             }
@@ -592,11 +659,21 @@ namespace ElementWar.Net
             foreach (int tick in acknowledged) _pendingInputs.Remove(tick);
 
             float tickDelta = 1f / Mathf.Max(1, _serverTickRate);
+            RefreshLocalDynamicCollision();
             foreach (var entry in _pendingInputs)
                 _localMotor.SimulateTick(entry.Value, tickDelta, _serverTickRate);
 
             _lastCorrectionDistance = Vector3.Distance(before, _localModel.transform.position);
             if (_lastCorrectionDistance > hardCorrectionDistance) _hardCorrectionCount++;
+        }
+
+        private void RefreshLocalDynamicCollision()
+        {
+            if (_localMotor == null) return;
+            var positions = new List<Vector3>(_remotes.Count);
+            foreach (var remote in _remotes.Values)
+                if (remote != null && !remote.IsDead) positions.Add(remote.LatestAuthoritativePosition);
+            _localMotor.SetDynamicCollisionPositions(positions);
         }
 
         private static int FirstKey(SortedDictionary<int, PlayerInputMessage> values)
@@ -677,16 +754,28 @@ namespace ElementWar.Net
 
         private void OnMatchEnd(ReliableEventMessage e)
         {
+            _matchEnded = true;
+            _pendingInputs.Clear();
+            _inputAccumulator = 0f;
+            _localMotor?.BeginSettlementPlayback(SettlementPlaybackDuration, SettlementPlaybackScale);
+            foreach (var remote in _remotes.Values)
+                remote.BeginSettlementPlayback(SettlementPlaybackDuration, SettlementPlaybackScale);
             Debug.Log($"[NetClient] 对局结束，胜者 {e.winnerPlayerId}");
             OnMatchEnded?.Invoke(e.winnerPlayerId);
         }
 
         private void OnApplicationQuit()
         {
-            if (_socket != null && _connected)
-            {
-                try { _socket.SendJson(JsonUtility.ToJson(new ClientGoodbyeMessage())); } catch { }
-            }
+            DisconnectGracefully();
+        }
+
+        /// <summary>场景退出前主动释放服务器席位，避免下一局短时间重连被旧连接占满。</summary>
+        public void DisconnectGracefully()
+        {
+            if (_goodbyeSent || _socket == null || !_connected) return;
+            _goodbyeSent = true;
+            try { _socket.SendJson(JsonUtility.ToJson(new ClientGoodbyeMessage())); }
+            catch { }
         }
     }
 }

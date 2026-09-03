@@ -39,13 +39,7 @@ public class MainMenuUI : UIBase<MainMenuUI>
         btnAuthor.onClick.AddListener(showTipMenu);
         btnLanguage.onClick.AddListener(showTipMenu);
         btnVoice.onClick.AddListener(showTipMenu);
-        btnExit.onClick.AddListener(() => {
-            // 退出逻辑
-            Exit(() =>
-            {
-                ExitMenuUI.INSTANCE.Enter();
-            });
-        });
+        btnExit.onClick.AddListener(ShowExitMenu);
     }
 
     protected override void Start()
@@ -61,7 +55,26 @@ public class MainMenuUI : UIBase<MainMenuUI>
     {
         Exit(() =>
         {
-            TipMenuUI.INSTANCE.Enter();
+            // TipMenu 在场景中默认是隐藏物体，某些加载顺序下不会先执行 Awake，
+            // 因此不能直接依赖静态 INSTANCE。
+            var tipMenu = FindObjectOfType<TipMenuUI>(true);
+            if (tipMenu != null)
+                tipMenu.Enter();
+            else
+                Debug.LogWarning("[MainMenuUI] 找不到 TipMenu，跳过提示菜单显示。");
+        });
+    }
+
+    private void ShowExitMenu()
+    {
+        Exit(() =>
+        {
+            // 与 TipMenu 相同：退出确认框可能默认隐藏，不能依赖尚未 Awake 的静态 INSTANCE。
+            var exitMenu = FindObjectOfType<ExitMenuUI>(true);
+            if (exitMenu != null)
+                exitMenu.Enter();
+            else
+                Debug.LogWarning("[MainMenuUI] 找不到 ExitMenu，跳过退出确认框显示。");
         });
     }
 

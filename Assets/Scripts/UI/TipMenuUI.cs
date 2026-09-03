@@ -18,7 +18,11 @@ public class TipMenuUI : UIBase<TipMenuUI>
         {
             Exit(() =>
             {
-                MainMenuUI.INSTANCE.Enter();
+                var mainMenu = FindObjectOfType<MainMenuUI>(true);
+                if (mainMenu != null)
+                    mainMenu.Enter();
+                else
+                    Debug.LogWarning("[TipMenuUI] 找不到 MainMenu，无法返回主菜单。");
             });
         });
     }

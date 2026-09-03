@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using System.Diagnostics;
 
 namespace ElementWar.Server;
 
@@ -40,6 +41,7 @@ public sealed class UdpGameServer : IDisposable
     private readonly Dictionary<string, ClientConnection> _clients = new(); // endpointKey → conn
     private readonly Dictionary<int, string> _playerToEndpointKey = new();  // playerId → endpointKey
     private readonly List<(IPEndPoint ep, string json)> _pendingSends = new();
+    private readonly string _sessionId = Guid.NewGuid().ToString("N").Substring(0, 12);
     private long _nextEventId = 1;
     private bool _disposed;
 
@@ -52,7 +54,7 @@ public sealed class UdpGameServer : IDisposable
         _world = new GameWorld(options.WorldSettings);
         _world.Log = Console.WriteLine; // GameWorld 零 IO，诊断输出交给宿主
         _udp = new UdpClient(options.ListenPort);
-        Console.WriteLine($"[ElementWarServer] listening on 0.0.0.0:{options.ListenPort} @ {options.TickRate}Hz");
+        Console.WriteLine($"[ElementWarServer] listening on 0.0.0.0:{options.ListenPort} @ {options.TickRate}Hz session={_sessionId}");
     }
 
     public async Task RunAsync(CancellationToken token)
@@ -100,6 +102,7 @@ public sealed class UdpGameServer : IDisposable
                 case "input": HandleInput(from, json); break;
                 case "inputBatch": HandleInputBatch(from, json); break;
                 case "fire": HandleFire(from, json); break;
+                case "reload": HandleReload(from, json); break;
                 case "ping": HandlePing(from, json); break;
                 case "ack": HandleAck(from, json); break;
                 case "goodbye": HandleGoodbye(from); break;
@@ -126,8 +129,22 @@ public sealed class UdpGameServer : IDisposable
 
         if (_world.HumanCount >= 2)
         {
-            Send(from, JsonSerializer.Serialize(new { type = "welcome_full", message = "房间已满（最多 2 人）" }));
-            return;
+            // 结算后旧客户端会在本地播放慢动作再退出。若 goodbye 因 UDP 丢失或场景切换过快
+            // 未送达，新一局 hello 不应被上一局的两个已封盘连接阻塞到超时。
+            if (_world.MatchEnded)
+            {
+                var staleClients = _clients.ToArray();
+                foreach (var pair in staleClients)
+                    RemoveClient(pair.Value, pair.Key, "新对局连接接管（上一局已结算）");
+            }
+
+            // 正常对局中仍保持严格 2 人上限。结算态接管只处理已封盘的旧连接，
+            // 不会让第三个客户端插入正在进行的比赛。
+            if (_world.HumanCount >= 2)
+            {
+                Send(from, JsonSerializer.Serialize(new { type = "welcome_full", message = "房间已满（最多 2 人）" }));
+                return;
+            }
         }
 
         var player = _world.AddPlayer(msg.PlayerName, msg.CharacterId);
@@ -153,6 +170,7 @@ public sealed class UdpGameServer : IDisposable
             ServerTickRate = _options.TickRate,
             WinScore = _options.WorldSettings.WinScore,
             ServerTick = _world.ServerTick,
+            SessionId = _sessionId,
         };
         Send(conn.Endpoint, Serialize(welcome));
     }
@@ -203,6 +221,15 @@ public sealed class UdpGameServer : IDisposable
         Send(conn.Endpoint, Serialize(receipt));
     }
 
+    private void HandleReload(IPEndPoint from, string json)
+    {
+        var key = from.ToString();
+        if (!_clients.TryGetValue(key, out var conn)) return;
+        var msg = JsonSerializer.Deserialize<ReloadRequestMessage>(json);
+        if (msg is null || msg.PlayerId != conn.PlayerId) return;
+        _world.TryQueueReload(conn.PlayerId, msg);
+    }
+
     private void HandlePing(IPEndPoint from, string json)
     {
         var key = from.ToString();
@@ -245,17 +272,42 @@ public sealed class UdpGameServer : IDisposable
 
     private async Task TickLoop(CancellationToken token)
     {
-        float dt = 1f / _options.TickRate;
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(dt));
-        while (await timer.WaitForNextTickAsync(token))
+        int tickRate = Math.Max(1, _options.TickRate);
+        float dt = 1f / tickRate;
+        // PeriodicTimer 的等待可能出现亚毫秒级提前/滞后；若每次都以上一次完成时间为基准，
+        // 误差会累积，实测 60Hz 服务器会逐渐跑到约 62Hz。用单调时钟的绝对截止时间调度，
+        // 每个 tick 都对齐理论时间轴，不让调度误差改变权威模拟速率。
+        double intervalTicks = Stopwatch.Frequency / (double)tickRate;
+        double nextDeadline = Stopwatch.GetTimestamp() + intervalTicks;
+        while (!token.IsCancellationRequested)
         {
+            while (true)
+            {
+                double remainingTicks = nextDeadline - Stopwatch.GetTimestamp();
+                if (remainingTicks <= 0) break;
+
+                int delayMs = (int)(remainingTicks * 1000.0 / Stopwatch.Frequency);
+                if (delayMs > 0)
+                    await Task.Delay(Math.Min(delayMs, 10), token);
+                else
+                    await Task.Yield();
+            }
+
+            nextDeadline += intervalTicks;
+            // 进程被系统长时间挂起时不要连续补跑大量 tick；从当前时刻重新建立时间轴。
+            if (Stopwatch.GetTimestamp() - nextDeadline > intervalTicks * 4)
+                nextDeadline = Stopwatch.GetTimestamp() + intervalTicks;
+
             _pendingSends.Clear();
             lock (_stateLock)
             {
+                bool wasMatchEnded = _world.MatchEnded;
                 _world.StepFrame(dt);
 
-                foreach (var conn in _clients.Values)
-                    BuildSnapshotFor(conn);
+                // 发送产生结算事件的最后一帧；从下一 tick 开始封盘，不再发送普通状态快照。
+                if (!wasMatchEnded)
+                    foreach (var conn in _clients.Values)
+                        BuildSnapshotFor(conn);
 
                 BuildReliableEventsForAll();
                 BuildReliableResendsForAll();

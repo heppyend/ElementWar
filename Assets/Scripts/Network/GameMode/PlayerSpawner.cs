@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.AI;
 
 namespace ElementWar.Net
 {
@@ -34,9 +35,25 @@ namespace ElementWar.Net
             // 与服务器 GetGroundY 对齐，避免不同角色首帧发生垂直硬校正。
             float groundY = characterId == 1 ? 0.15f : 0.025f;
             Vector3 spawnPos = new Vector3(sp.position.x, groundY, sp.position.z);
-            GameObject go = Instantiate(prefab, spawnPos, sp.rotation);
+            // 角色 prefab 自带 NavMeshAgent；PVP 场景未烘焙 NavMesh，直接 Instantiate 会在 OnEnable
+            // 期间刷 "no valid NavMesh"。先在失活容器中生成并关闭所有 Agent，再激活角色。
+            var staging = new GameObject("PVP_LocalSpawnStaging");
+            staging.SetActive(false);
+            GameObject go = Instantiate(prefab, spawnPos, sp.rotation, staging.transform);
             go.name = $"Local_{playerId}";
-            return go.GetComponent<PlayerModel>();
+            var model = go.GetComponent<PlayerModel>();
+            if (model != null) model.disableStateMachine = true;
+            DisableNavMeshAgents(go);
+            go.transform.SetParent(null, true);
+            go.SetActive(true);
+            Destroy(staging);
+            return model;
+        }
+
+        private static void DisableNavMeshAgents(GameObject go)
+        {
+            foreach (var agent in go.GetComponentsInChildren<NavMeshAgent>(true))
+                agent.enabled = false;
         }
 
         private Transform GetSpawnPoint(int playerId)

@@ -59,7 +59,10 @@ public static class NavMeshLayerDiagWizard
                 var mf = g.GetComponent<MeshFilter>();
                 var mc = g.GetComponent<MeshCollider>();
                 var mod = g.GetComponent<NavMeshModifier>();
-                bool navStatic = (GameObjectUtility.GetStaticEditorFlags(g) & StaticEditorFlags.NavigationStatic) != 0;
+                // Unity 2022.3 已将 NavigationStatic 枚举成员标为 obsolete；诊断仍需兼容读取旧场景标记，
+                // 通过名称解析避免编译期引用过时成员。新 NavMesh 流程应以 NavMeshSurface/CollectSources 为准。
+                var navigationStaticFlag = (StaticEditorFlags)System.Enum.Parse(typeof(StaticEditorFlags), "NavigationStatic");
+                bool navStatic = (GameObjectUtility.GetStaticEditorFlags(g) & navigationStaticFlag) != 0;
 
                 L($"  [{g.name}] active={g.activeInHierarchy} layer={g.layer} " +
                   $"renderer={(mr != null ? "有(enabled=" + mr.enabled + ")" : "无")} " +
