@@ -11,6 +11,9 @@
 
   <ItemGroup>
     <Compile Include="..\Assets\Scripts\Gameplay\Combat\Core\CombatCore.cs" Link="Combat\CombatCore.cs" />
+    <Compile Include="..\Assets\Scripts\Gameplay\Rules\GameRulesContracts.cs" Link="Rules\GameRulesContracts.cs" />
+    <Compile Include="..\Assets\Scripts\Gameplay\Rules\GameRulesValidator.cs" Link="Rules\GameRulesValidator.cs" />
+    <Compile Include="..\Assets\Scripts\Gameplay\Rules\GameRulesHash.cs" Link="Rules\GameRulesHash.cs" />
   </ItemGroup>
 
 </Project>

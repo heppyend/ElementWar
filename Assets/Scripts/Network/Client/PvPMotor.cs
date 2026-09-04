@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.Animations.Rigging;
 using System.Collections.Generic;
+using ElementWar.Rules;
 
 namespace ElementWar.Net
 {
@@ -11,7 +12,7 @@ namespace ElementWar.Net
     [RequireComponent(typeof(PlayerModel))]
     public class PvPMotor : MonoBehaviour
     {
-        // 必须与 Server/GameWorldSettings 保持一致。
+        // 规则文件加载前的安全默认值；运行时由 GameRules.v1.json 覆盖。
         public const float JogSpeed = 5f;
         public const float SprintSpeed = 8f;
         public const float AimMoveSpeed = 2.5f;
@@ -53,12 +54,41 @@ namespace ElementWar.Net
         private float _settlementDuration;
         private float _settlementScale;
         private Vector3 _settlementVelocity;
+        private float _jogSpeed = JogSpeed;
+        private float _sprintSpeed = SprintSpeed;
+        private float _aimMoveSpeed = AimMoveSpeed;
+        private float _turnSpeedDeg = TurnSpeedDeg;
+        private float _gravity = Gravity;
+        private float _jumpVelocity = JumpVelocity;
+        private float _slideDuration = SlideDuration;
+        private float _slideStartSpeed = SlideStartSpeed;
+        private float _slideEndSpeed = SlideEndSpeed;
+        private float _sprintSlideBoost = SprintSlideBoost;
+        private float _arenaHalfExtent = ArenaHalfExtent;
+        private float _collisionRadius = CollisionRadius;
 
         public float VerticalSpeed => _verticalSpeed;
         public bool IsGrounded => _isGrounded;
         public float SpeedBlend => _speedBlend;
         public bool IsSliding => _isSliding;
         public int SlideTicksRemaining => _slideTicksRemaining;
+
+        public void ApplyRules(RuleProfile profile)
+        {
+            if (profile == null) throw new System.ArgumentNullException(nameof(profile));
+            _jogSpeed = profile.movement.jogSpeed;
+            _sprintSpeed = profile.movement.sprintSpeed;
+            _aimMoveSpeed = profile.movement.aimMoveSpeed;
+            _turnSpeedDeg = profile.movement.rotationSpeedDeg;
+            _gravity = profile.movement.gravity;
+            _jumpVelocity = profile.movement.jumpVelocity;
+            _slideDuration = profile.movement.slideDurationSeconds;
+            _slideStartSpeed = profile.movement.slideStartSpeed;
+            _slideEndSpeed = profile.movement.slideEndSpeed;
+            _sprintSlideBoost = profile.movement.sprintSlideBoost;
+            _arenaHalfExtent = profile.spawn.arenaHalfExtent;
+            _collisionRadius = profile.spawn.collisionRadius;
+        }
 
         /// <summary>比赛结束后的本地视觉回放，不再参与权威模拟。</summary>
         public void BeginSettlementPlayback(float duration, float scale)
@@ -75,7 +105,7 @@ namespace ElementWar.Net
             else
                 direction = Vector3.zero;
 
-            float speed = _isSliding ? SlideEndSpeed : isSprint ? SprintSpeed : (isAiming || isFire ? AimMoveSpeed : JogSpeed);
+            float speed = _isSliding ? _slideEndSpeed : isSprint ? _sprintSpeed : (isAiming || isFire ? _aimMoveSpeed : _jogSpeed);
             _settlementVelocity = direction * speed;
             _isSliding = false;
             _slideTicksRemaining = 0;
@@ -131,7 +161,7 @@ namespace ElementWar.Net
             if (_isSliding)
             {
                 float slideYaw = Mathf.Atan2(_slideDirection.x, _slideDirection.z) * Mathf.Rad2Deg;
-                return Mathf.MoveTowardsAngle(bodyYawDeg, slideYaw, TurnSpeedDeg * dt);
+                return Mathf.MoveTowardsAngle(bodyYawDeg, slideYaw, _turnSpeedDeg * dt);
             }
 
             if (aiming)
@@ -147,7 +177,7 @@ namespace ElementWar.Net
             if (move.sqrMagnitude <= 0.0001f) return bodyYawDeg;
             move.Normalize();
             float targetYaw = Mathf.Atan2(move.x, move.z) * Mathf.Rad2Deg;
-            return Mathf.MoveTowardsAngle(bodyYawDeg, targetYaw, TurnSpeedDeg * dt);
+                return Mathf.MoveTowardsAngle(bodyYawDeg, targetYaw, _turnSpeedDeg * dt);
         }
 
         /// <summary>执行一次与服务器相同的固定步进；也用于快照后的未确认输入重放。</summary>
@@ -160,7 +190,7 @@ namespace ElementWar.Net
 
             if (_isGrounded && input.isJumping)
             {
-                _verticalSpeed = JumpVelocity;
+                _verticalSpeed = _jumpVelocity;
                 _isGrounded = false;
                 _isSliding = false;
                 _slideTicksRemaining = 0;
@@ -169,7 +199,7 @@ namespace ElementWar.Net
             if (!_isSliding && _isGrounded && input.isSlide)
             {
                 _isSliding = true;
-                _slideTicksRemaining = Mathf.Max(1, Mathf.RoundToInt(SlideDuration * serverTickRate));
+                _slideTicksRemaining = Mathf.Max(1, Mathf.RoundToInt(_slideDuration * serverTickRate));
                 _slideDirection = new Vector3(input.worldMoveX, 0f, input.worldMoveZ);
                 if (_slideDirection.sqrMagnitude <= 0.0001f)
                 {
@@ -194,7 +224,7 @@ namespace ElementWar.Net
             if (inputDir.sqrMagnitude > 1f) inputDir.Normalize();
             bool moving = inputDir.magnitude > 0.01f;
             float speed = moving
-                ? input.isSprint ? SprintSpeed : aiming ? AimMoveSpeed : JogSpeed
+                ? input.isSprint ? _sprintSpeed : aiming ? _aimMoveSpeed : _jogSpeed
                 : 0f;
 
             Vector3 moveDir;
@@ -211,7 +241,7 @@ namespace ElementWar.Net
             Vector3 newPos = transform.position + moveDir * (speed * dt);
             if (!_isGrounded)
             {
-                _verticalSpeed += Gravity * dt;
+                _verticalSpeed += _gravity * dt;
                 newPos.y = transform.position.y + _verticalSpeed * dt;
             }
 
@@ -222,8 +252,8 @@ namespace ElementWar.Net
                 _isGrounded = true;
             }
 
-            newPos = PvpCollisionWorld.ResolveMovement(transform.position, newPos, CollisionRadius, ArenaHalfExtent, _groundY);
-            newPos = PvpCollisionWorld.ResolveAgainstPlayers(newPos, _dynamicCollisionPositions, CollisionRadius, ArenaHalfExtent, _groundY);
+            newPos = PvpCollisionWorld.ResolveMovement(transform.position, newPos, _collisionRadius, _arenaHalfExtent, _groundY);
+            newPos = PvpCollisionWorld.ResolveAgainstPlayers(newPos, _dynamicCollisionPositions, _collisionRadius, _arenaHalfExtent, _groundY);
             transform.position = newPos;
             transform.rotation = Quaternion.Euler(0f, bodyYawDeg, 0f);
             _isGrounded = newPos.y <= _groundY + 0.001f;
@@ -231,15 +261,15 @@ namespace ElementWar.Net
 
         private void StepSlide(float dt, int serverTickRate)
         {
-            int totalTicks = Mathf.Max(1, Mathf.RoundToInt(SlideDuration * serverTickRate));
+            int totalTicks = Mathf.Max(1, Mathf.RoundToInt(_slideDuration * serverTickRate));
             float t = _slideTicksRemaining / (float)totalTicks;
-            float speed = Mathf.Lerp(SlideEndSpeed, SlideStartSpeed, t);
-            if (_slideSprintBoost) speed += SprintSlideBoost * t;
+            float speed = Mathf.Lerp(_slideEndSpeed, _slideStartSpeed, t);
+            if (_slideSprintBoost) speed += _sprintSlideBoost * t;
 
             Vector3 newPos = transform.position + _slideDirection * (speed * dt);
             newPos.y = _groundY;
-            newPos = PvpCollisionWorld.ResolveMovement(transform.position, newPos, CollisionRadius, ArenaHalfExtent, _groundY);
-            newPos = PvpCollisionWorld.ResolveAgainstPlayers(newPos, _dynamicCollisionPositions, CollisionRadius, ArenaHalfExtent, _groundY);
+            newPos = PvpCollisionWorld.ResolveMovement(transform.position, newPos, _collisionRadius, _arenaHalfExtent, _groundY);
+            newPos = PvpCollisionWorld.ResolveAgainstPlayers(newPos, _dynamicCollisionPositions, _collisionRadius, _arenaHalfExtent, _groundY);
             transform.position = newPos;
             _verticalSpeed = 0f;
             _isGrounded = true;
@@ -304,7 +334,7 @@ namespace ElementWar.Net
             float t = Mathf.Clamp01(_settlementElapsed / _settlementDuration);
             float damping = 1f - Mathf.SmoothStep(0f, 1f, t);
             Vector3 next = transform.position + _settlementVelocity * (dt * _settlementScale * damping);
-            next = PvpCollisionWorld.ResolveMovement(transform.position, next, CollisionRadius, ArenaHalfExtent, _groundY);
+            next = PvpCollisionWorld.ResolveMovement(transform.position, next, _collisionRadius, _arenaHalfExtent, _groundY);
             transform.position = next;
 
             if (_settlementVelocity.sqrMagnitude > 0.0001f)

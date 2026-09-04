@@ -3,6 +3,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using System.Diagnostics;
+using ElementWar.Rules;
 
 namespace ElementWar.Server;
 
@@ -119,6 +120,17 @@ public sealed class UdpGameServer : IDisposable
         var msg = JsonSerializer.Deserialize<ClientHelloMessage>(json);
         if (msg is null) return;
 
+        if (msg.RulesSchemaVersion != GameRulesValidator.SupportedSchemaVersion
+            || !string.Equals(msg.RulesetId, _options.WorldSettings.RulesetId, StringComparison.Ordinal)
+            || !string.Equals(msg.RulesContentHash, _options.WorldSettings.RulesContentHash, StringComparison.OrdinalIgnoreCase))
+        {
+            Send(from, Serialize(new RulesRejectedMessage
+            {
+                Reason = $"规则不匹配：client={msg.RulesetId}/{msg.RulesContentHash} server={_options.WorldSettings.RulesetId}/{_options.WorldSettings.RulesContentHash}"
+            }));
+            return;
+        }
+
         string key = from.ToString();
         if (_clients.TryGetValue(key, out var existing))
         {
@@ -171,6 +183,9 @@ public sealed class UdpGameServer : IDisposable
             WinScore = _options.WorldSettings.WinScore,
             ServerTick = _world.ServerTick,
             SessionId = _sessionId,
+            RulesSchemaVersion = GameRulesValidator.SupportedSchemaVersion,
+            RulesetId = _options.WorldSettings.RulesetId,
+            RulesContentHash = _options.WorldSettings.RulesContentHash,
         };
         Send(conn.Endpoint, Serialize(welcome));
     }

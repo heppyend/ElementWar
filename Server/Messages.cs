@@ -12,6 +12,9 @@ public sealed class ClientHelloMessage
     [JsonPropertyName("type")] public string Type { get; set; } = string.Empty;
     [JsonPropertyName("playerName")] public string PlayerName { get; set; } = string.Empty;
     [JsonPropertyName("characterId")] public int CharacterId { get; set; }   // 0=荧 1=芙宁娜
+    [JsonPropertyName("rulesSchemaVersion")] public int RulesSchemaVersion { get; set; }
+    [JsonPropertyName("rulesetId")] public string RulesetId { get; set; } = string.Empty;
+    [JsonPropertyName("rulesContentHash")] public string RulesContentHash { get; set; } = string.Empty;
 }
 
 public sealed class ServerWelcomeMessage
@@ -24,6 +27,15 @@ public sealed class ServerWelcomeMessage
     [JsonPropertyName("serverTick")] public int ServerTick { get; set; }
     // 服务器进程会话标识：用于把同一场双端测试的客户端日志自动配对
     [JsonPropertyName("sessionId")] public string SessionId { get; set; } = string.Empty;
+    [JsonPropertyName("rulesSchemaVersion")] public int RulesSchemaVersion { get; set; }
+    [JsonPropertyName("rulesetId")] public string RulesetId { get; set; } = string.Empty;
+    [JsonPropertyName("rulesContentHash")] public string RulesContentHash { get; set; } = string.Empty;
+}
+
+public sealed class RulesRejectedMessage
+{
+    [JsonPropertyName("type")] public string Type { get; set; } = "rulesRejected";
+    [JsonPropertyName("reason")] public string Reason { get; set; } = string.Empty;
 }
 
 public sealed class PlayerInputMessage

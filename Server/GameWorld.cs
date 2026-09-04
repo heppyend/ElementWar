@@ -1,4 +1,5 @@
 using ElementWar.Combat;
+using ElementWar.Rules;
 
 namespace ElementWar.Server;
 
@@ -9,6 +10,8 @@ namespace ElementWar.Server;
 
 public sealed class GameWorldSettings
 {
+    public string RulesetId = string.Empty;
+    public string RulesContentHash = string.Empty;
     public int ServerTickRate = 60;    // 08-21：30→60Hz（命中反馈/远端平滑 2x；命中/计分/滑铲均按 tick 数算，随 tick 率缩放）
     public float Gravity = -15f;
     public float WalkSpeed = 2.2f;
@@ -53,6 +56,44 @@ public sealed class GameWorldSettings
     public float BotAimErrorBase = 0.8f;
     public int BotDecisionTicksMin = 30;       // AI 决策间隔（60Hz tick）：0.5s
     public int BotDecisionTicksMax = 50;       // ~0.83s
+
+    public static GameWorldSettings FromRules(RuleProfile profile)
+    {
+        var settings = new GameWorldSettings();
+        settings.ApplyRules(profile);
+        return settings;
+    }
+
+    public void ApplyRules(RuleProfile profile)
+    {
+        if (profile is null) throw new ArgumentNullException(nameof(profile));
+        Gravity = profile.movement.gravity;
+        WalkSpeed = profile.movement.walkSpeed;
+        JogSpeed = profile.movement.jogSpeed;
+        SprintSpeed = profile.movement.sprintSpeed;
+        AimMoveSpeed = profile.movement.aimMoveSpeed;
+        JumpVelocity = profile.movement.jumpVelocity;
+        SlideDurationSeconds = profile.movement.slideDurationSeconds;
+        SlideStartSpeed = profile.movement.slideStartSpeed;
+        SlideEndSpeed = profile.movement.slideEndSpeed;
+        SprintSlideBoost = profile.movement.sprintSlideBoost;
+        RotationSpeedDeg = profile.movement.rotationSpeedDeg;
+        MaxHealth = profile.life.maxHealth;
+        FireDamage = profile.weapon.damage;
+        FireCooldownSeconds = profile.weapon.fireCooldownSeconds;
+        WeaponMagazineCapacity = profile.weapon.magazineCapacity;
+        WeaponReserveAmmo = profile.weapon.reserveAmmo;
+        ReloadDurationSeconds = profile.weapon.reloadDurationSeconds;
+        RespawnSeconds = profile.life.respawnSeconds;
+        FireRange = profile.weapon.fireRange;
+        HitRadius = profile.life.hitRadius;
+        HitHeight = profile.life.hitHeight;
+        EyeHeight = profile.life.eyeHeight;
+        GroundY = profile.spawn.groundY;
+        ArenaHalfExtent = profile.spawn.arenaHalfExtent;
+        CollisionRadius = profile.spawn.collisionRadius;
+        WinScore = profile.spawn.winScore;
+    }
 }
 
 /// <summary>延迟补偿用的历史帧。</summary>

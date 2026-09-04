@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "rulesetId": "elementwar-baseline-2026-09-04",
+  "pve": {
+    "movement": {
+      "gravity": -15.0,
+      "walkSpeed": 2.2,
+      "jogSpeed": 5.0,
+      "sprintSpeed": 8.0,
+      "aimMoveSpeed": 2.5,
+      "jumpVelocity": 6.7,
+      "slideDurationSeconds": 0.8,
+      "slideStartSpeed": 7.0,
+      "slideEndSpeed": 1.5,
+      "sprintSlideBoost": 2.0,
+      "rotationSpeedDeg": 300.0
+    },
+    "weapon": {
+      "magazineCapacity": 30,
+      "reserveAmmo": 90,
+      "damage": 10,
+      "fireCooldownSeconds": 0.15,
+      "reloadDurationSeconds": 1.5,
+      "fireRange": 35.0
+    },
+    "life": {
+      "maxHealth": 100,
+      "respawnSeconds": 3.0,
+      "hitRadius": 1.2,
+      "hitHeight": 1.8,
+      "eyeHeight": 1.5
+    },
+    "spawn": {
+      "groundY": 0.15,
+      "arenaHalfExtent": 40.0,
+      "collisionRadius": 0.4,
+      "winScore": 5
+    }
+  },
+  "pvp_1v1": {
+    "movement": {
+      "gravity": -15.0,
+      "walkSpeed": 2.2,
+      "jogSpeed": 5.0,
+      "sprintSpeed": 8.0,
+      "aimMoveSpeed": 2.5,
+      "jumpVelocity": 6.7,
+      "slideDurationSeconds": 0.8,
+      "slideStartSpeed": 7.0,
+      "slideEndSpeed": 1.5,
+      "sprintSlideBoost": 2.0,
+      "rotationSpeedDeg": 720.0
+    },
+    "weapon": {
+      "magazineCapacity": 30,
+      "reserveAmmo": 90,
+      "damage": 25,
+      "fireCooldownSeconds": 0.15,
+      "reloadDurationSeconds": 1.5,
+      "fireRange": 35.0
+    },
+    "life": {
+      "maxHealth": 100,
+      "respawnSeconds": 3.0,
+      "hitRadius": 1.2,
+      "hitHeight": 1.8,
+      "eyeHeight": 1.5
+    },
+    "spawn": {
+      "groundY": 0.15,
+      "arenaHalfExtent": 40.0,
+      "collisionRadius": 0.4,
+      "winScore": 5
+    }
+  }
+}

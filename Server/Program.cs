@@ -16,9 +16,22 @@ options.WorldSettings.ServerTickRate = options.TickRate;
 
 if (ParseFlag("--self-test"))
 {
+    if (!GameRulesFileLoader.TryLoadDefault(out var selfTestRules, out string selfTestHash, out string selfTestError))
+        throw new InvalidOperationException($"规则校验失败：{selfTestError}");
+    Console.WriteLine($"[Rules] loaded ruleset={selfTestRules.rulesetId} hash={selfTestHash}");
     SelfTests.Run();
     return;
 }
+
+if (!GameRulesFileLoader.TryLoadDefault(out var rules, out string rulesHash, out string rulesError))
+{
+    Console.Error.WriteLine($"[ElementWarServer] 规则校验失败，拒绝启动：{rulesError}");
+    Environment.ExitCode = 2;
+    return;
+}
+options.WorldSettings.ApplyRules(rules.pvp_1v1);
+options.WorldSettings.RulesetId = rules.rulesetId;
+options.WorldSettings.RulesContentHash = rulesHash;
 
 using var shutdown = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) =>

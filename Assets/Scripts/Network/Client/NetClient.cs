@@ -4,6 +4,7 @@ using UnityEngine;
 using UnityEngine.Animations.Rigging;
 using UnityEngine.SceneManagement;
 using UnityEngine.InputSystem;
+using ElementWar.Rules;
 
 namespace ElementWar.Net
 {
@@ -64,6 +65,9 @@ namespace ElementWar.Net
         private int _previousVSyncCount;
         private bool _framePacingApplied;
         private bool _goodbyeSent;
+        private GameRulesDocument _rules;
+        private string _rulesContentHash = "";
+        private bool _rulesReady;
 
         private MyInputSystem _input;
         private Camera _mainCamera;
@@ -114,6 +118,11 @@ namespace ElementWar.Net
             ApplyPvpFramePacing();
             _input = new MyInputSystem();
             _mainCamera = Camera.main;
+            _rulesReady = GameRulesRuntimeLoader.TryLoad(out _rules, out _rulesContentHash, out string rulesError);
+            if (!_rulesReady)
+                Debug.LogError($"[NetClient] 规则校验失败，禁止连接服务器：{rulesError}");
+            else
+                _fireRequestInterval = _rules.pvp_1v1.weapon.fireCooldownSeconds;
             // 兜底：确保左上角信息窗存在（NetworkLauncher 可能因组件缺失提前 return 没创建）
             if (FindObjectOfType<DebugInfoWindow>() == null)
                 new GameObject("DebugInfoWindow").AddComponent<DebugInfoWindow>();
@@ -158,6 +167,11 @@ namespace ElementWar.Net
         /// <summary>建立连接（由 NetworkLauncher 调用）。</summary>
         public void Connect()
         {
+            if (!_rulesReady)
+            {
+                Debug.LogError("[NetClient] 未加载有效 GameRules.v1.json，连接已取消。");
+                return;
+            }
             try
             {
                 _goodbyeSent = false;
@@ -280,6 +294,9 @@ namespace ElementWar.Net
             {
                 playerName = playerName,
                 characterId = characterId,
+                rulesSchemaVersion = _rules.schemaVersion,
+                rulesetId = _rules.rulesetId,
+                rulesContentHash = _rulesContentHash,
             }));
             _nextHelloTime = Time.unscaledTime + 1f;
         }
@@ -409,7 +426,7 @@ namespace ElementWar.Net
         private void DrainSocket()
         {
             string json;
-            while ((json = _socket.TryReceive()) != null)
+            while (_socket != null && (json = _socket.TryReceive()) != null)
             {
                 HandleJson(json);
             }
@@ -427,6 +444,9 @@ namespace ElementWar.Net
                         break;
                     case Msg.WelcomeFull:
                         Debug.LogWarning("[NetClient] 房间已满");
+                        break;
+                    case Msg.RulesRejected:
+                        HandleRulesRejected(JsonUtility.FromJson<RulesRejectedMessage>(json));
                         break;
                     case Msg.Snapshot:
                         HandleSnapshot(JsonUtility.FromJson<WorldSnapshotMessage>(json));
@@ -465,6 +485,13 @@ namespace ElementWar.Net
 
         private void HandleWelcome(ServerWelcomeMessage w)
         {
+            if (!_rulesReady || w.rulesSchemaVersion != _rules.schemaVersion
+                || !string.Equals(w.rulesetId, _rules.rulesetId, StringComparison.Ordinal)
+                || !string.Equals(w.rulesContentHash, _rulesContentHash, StringComparison.OrdinalIgnoreCase))
+            {
+                HandleRulesRejected(new RulesRejectedMessage { reason = "服务器返回的规则版本或哈希与本地不一致。" });
+                return;
+            }
             if (_connected && _playerId == w.playerId) return;
             _playerId = w.playerId;
             _serverTickRate = w.serverTickRate;
@@ -482,6 +509,7 @@ namespace ElementWar.Net
                 {
                     _localMotor = _localModel.gameObject.GetComponent<PvPMotor>();
                     if (_localMotor == null) _localMotor = _localModel.gameObject.AddComponent<PvPMotor>();
+                    _localMotor.ApplyRules(_rules.pvp_1v1);
                     _localModel.disableStateMachine = true;
                     // PVP 无 AI 随从：禁用 NavMeshAgent，避免与 PvPMotor 抢位移
                     if (_localModel.navMeshAgent != null) _localModel.navMeshAgent.enabled = false;
@@ -493,6 +521,14 @@ namespace ElementWar.Net
 
             _nextPingTime = Time.unscaledTime;
             Debug.Log($"[NetClient] 已连接 playerId={_playerId} tickRate={_serverTickRate}");
+        }
+
+        private void HandleRulesRejected(RulesRejectedMessage rejection)
+        {
+            Debug.LogError($"[NetClient] 服务器拒绝连接：{(rejection != null ? rejection.reason : "规则不匹配")}");
+            _connected = false;
+            _socket?.Dispose();
+            _socket = null;
         }
 
         private void HandlePong(PongMessage pong)

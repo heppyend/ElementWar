@@ -109,6 +109,22 @@ NetClient
 3. 确认当前 Hunter/FPS 动画试验资源的效果，处理四组未提交 Unity 资源。
 4. 建立最小 Unity EditMode/PlayMode 测试；当前只有服务器 `SelfTests.cs`，Unity Test Framework 尚未真正使用。
 
+### P0：建立单一规则契约与 BBB 新角色沙盒
+
+这项工作是导入新角色模型、角色动画、敌人与枪械前的近期架构目标。目标不是让 PVE 与 PVP 强行共用移动实现，而是建立“同一规则格式、两个玩法档案、多个表现适配器”。
+
+1. 建立唯一人工维护的 `GameRules.v1.json`：包含 `schemaVersion`、`rulesetId`、`pve`、`pvp_1v1`，以及 movement / weapon / life / spawn 四组规则；角色、武器、敌人只通过 ID 与显式覆盖项引用规则。
+2. 建立不依赖 `UnityEngine` 的共享 DTO、校验器与内容哈希。PVP 客户端和服务器必须使用相同 schema、校验与哈希；配置不匹配时在握手阶段拒绝进房。
+3. 第一轮只迁 PVP 的 `GameWorldSettings` 与 `PvPMotor` 数值来源，保持当前玩法数值不变；现有 PVE 三角色不批量迁移，后续只接入同一 schema 的 `pve` profile。
+4. BBBNexus 直接用于 `TextScene/Single Framework` 的一个新角色试点，验证输入、意图仲裁、动画与装备表现；它不接管 PVP 权威模拟，也不替换当前 PVEGame。
+5. BBB 源码在进入公开主仓库前必须固定上游 commit，并补齐可留档的标准许可证文本；其自动修改 PlayerSettings 宏的 Editor 功能不进入首轮试点。
+
+### PMX 新角色适配基线
+
+PMX/MMD 新角色的转换、动作和 BBB-Nexus 适配要求见 [`PMX_Unity_Adaptation_Baseline.md`](Assets/BBBWork/NewCharacterAssets/Documentation/PMX_Unity_Adaptation_Baseline.md)。当前推荐由独立 Blender 工作区完成 `PMX/VMD → FBX` 转换，再由 Unity `TextScene` 完成导入、Avatar、动画、Root Motion、IK 和 BBB 控制器验证。该实验与正式 PVE/PVP 保持隔离。
+
+验收门槛：同一规则文件驱动 PVP 客户端与服务器；合法/非法/缺字段/版本不匹配/哈希不匹配有纯 C# 测试；现有跳跃、滑铲、弹药、换弹、伤害、死亡/重生自测不回归；Unity 双客户端能拒绝错误配置；BBB 沙盒只影响新角色试点，当前 PVEGame 不受影响。
+
 ### P1：把 PVP 从验证框架推进到可用 1v1
 
 1. 建立服务器可查询的竞技场碰撞数据，客户端只负责表现，避免穿墙和掩体无效。
@@ -125,7 +141,7 @@ NetClient
 2. 保留现有 `PlayerModel` 行为，先引入输入快照和角色运行数据，再拆状态；不整体替换已有 3C。
 3. 修正基础设施生命周期：`SingleMonoBase` 的重复实例策略、状态机销毁、集中 Update 订阅释放。
 4. 统一对象池边界。当前粒子和子弹已部分池化，但曳光、弹孔、血条等仍有 `Instantiate/Destroy`。
-5. 用 ScriptableObject 或纯数据对象承载角色、移动、武器和技能配置，为 Lua 数据层留下稳定边界。
+5. 用 ScriptableObject 或纯数据对象承载角色、移动、武器和技能配置，为 Lua 数据层留下稳定边界；在此之前不接入 Lua 运行时。
 
 ### P2：工程与内容建设
 
@@ -133,7 +149,7 @@ NetClient
 - 避免再次出现网络、场景、URP、字体和文档混在一个提交中的情况；
 - 评估 Git LFS 和二进制属性。当前约 7234 个跟踪文件、1.18 GB，仓库没有 `.gitattributes`；
 - 用 Profiler 数据设定 CPU、GC、Draw Call、显存和加载时间预算；
-- 在数据边界稳定后引入 Lua；只有大量同构实体的 Profiler 证据出现后，再做局部 ECS 试点。
+- 在数据边界稳定、内容迭代量足够大后，才以受控 PVE 试点引入 Lua；只有大量同构实体的 Profiler 证据出现后，再做局部 ECS 试点。
 
 ## 6. 三个开源框架的吸收方案
 
@@ -175,12 +191,28 @@ NetClient
 
 暂不导入：本地源码是 `2.0.0-preview`，外层 unitypackage 是 `1.8.5`，不能混用；源码包有大量测试，但部分 Unity 模块直接引用 UniTask，而包清单没有声明依赖；2.0 仍为预览版。优先借鉴接口和目录边界，不替换 `StateMachine`、`EffectPool` 或现有 PVP。
 
+### Lua：受控内容脚本路线
+
+Lua 是后续内容扩张的候选能力，不是当前基础设施改造项。当前工程未接入 Lua 运行时，先稳定角色、武器、移动和技能的数据边界。
+
+适合的范围：角色/武器/技能的配置、PVE 技能效果编排、怪物行为等可控内容规则。它的价值在于内容数量增长后，可以在不改动通用 C# 框架的前提下更快迭代数值与玩法组合。
+
+明确禁止进入：移动、碰撞、伤害结算、子弹命中、生命状态、网络协议和客户端 PVP 判定。PVP 继续由 C# 服务端权威执行；客户端 Lua 不得决定任何权威结果。
+
+代价与准入条件：Lua 会增加语言、调试、版本管理、C#/Lua 互调性能、IL2CPP 打包和测试维护成本。因此只有同时满足以下条件才做试点：
+
+1. 角色、武器、技能配置已从 C# 行为中稳定拆出；
+2. 已出现持续新增多套角色/技能或频繁平衡调整的实际需求；
+3. 先以一个可移除的 PVE 技能/怪物行为试点验证，覆盖 Editor、IL2CPP 构建、异常日志和性能测试；
+4. 试点未证明收益前，不进入 PVE 主链路，更不进入 PVP 权威路径。
+
 ### 在 ElementWar 中的落地顺序
 
 1. 先用 BBB-Nexus 思想定义 `PlayerInputSnapshot`、`CharacterRuntimeData` 和动作仲裁接口，但保持现有状态与动画行为。
 2. 用 YokiFrame 思想建立最小 `ILogSink`、事件总线和配置边界，不导入整包。
 3. 抽出 PVP 纯权威玩法核心与传输接口，为协议生成或 Fantasy 并行试点准备边界。
-4. 所有试点必须可移除、可对照、带测试和性能数据；未证明收益前不进入 PVE/PVP 主路径。
+4. Lua 仅在数据边界稳定后，以一个 PVE 内容脚本做可移除试点；PVP 权威逻辑保持 C#。
+5. 所有试点必须可移除、可对照、带测试和性能数据；未证明收益前不进入 PVE/PVP 主路径。
 
 ## 7. 新开发路线
 
@@ -209,7 +241,7 @@ NetClient
 ### 阶段 D：数据化与规模化
 
 - 角色、武器、技能配置解耦；
-- Lua 只进入内容配置和受控玩法脚本；
+- Lua 只进入内容配置和受控 PVE 玩法脚本，满足准入条件后再做单点试验；
 - ECS 只进入有数据证明的高数量实体领域；
 - Fantasy 仅在多房间/跨服需求成立时做并行试点。
 

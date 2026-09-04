@@ -12,6 +12,7 @@ namespace ElementWar.Net
         public const string Hello = "hello";
         public const string Welcome = "welcome";
         public const string WelcomeFull = "welcome_full";
+        public const string RulesRejected = "rulesRejected";
         public const string Input = "input";
         public const string InputBatch = "inputBatch";
         public const string Fire = "fire";
@@ -36,6 +37,9 @@ namespace ElementWar.Net
         public string type = Msg.Hello;
         public string playerName = "";
         public int characterId;
+        public int rulesSchemaVersion;
+        public string rulesetId = "";
+        public string rulesContentHash = "";
     }
 
     [Serializable] public class ServerWelcomeMessage
@@ -46,6 +50,15 @@ namespace ElementWar.Net
         public int winScore;
         public int serverTick;
         public string sessionId = "";
+        public int rulesSchemaVersion;
+        public string rulesetId = "";
+        public string rulesContentHash = "";
+    }
+
+    [Serializable] public class RulesRejectedMessage
+    {
+        public string type = Msg.RulesRejected;
+        public string reason = "";
     }
 
     [Serializable] public class PlayerInputMessage

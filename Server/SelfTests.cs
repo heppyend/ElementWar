@@ -1,3 +1,5 @@
+using ElementWar.Rules;
+
 namespace ElementWar.Server;
 
 /// <summary>无需网络端口的权威世界回归检查；运行 dotnet run -- --self-test。</summary>
@@ -14,7 +16,8 @@ public static class SelfTests
         PlayersAreSeparatedAndWallsBlockShots();
         JumpSurvivesCollisionResolution();
         AuthoritativeAmmoReloadsFromIntent();
-        Console.WriteLine("[SelfTest] 9/9 passed");
+        RulesValidatorRejectsInvalidProfiles();
+        Console.WriteLine("[SelfTest] 12/12 passed");
     }
 
     private static void AuthoritativeAmmoReloadsFromIntent()
@@ -30,6 +33,23 @@ public static class SelfTests
         Assert(player.Weapon.IsReloading, "server must enter reloading after accepted reload intent");
         for (int i = 0; i < 8; i++) world.StepFrame(1f / settings.ServerTickRate);
         Assert(player.Weapon.MagazineAmmo == 2 && player.Weapon.ReserveAmmo == 2 && !player.Weapon.IsReloading, "server must complete reload with reserve transfer");
+    }
+
+    private static void RulesValidatorRejectsInvalidProfiles()
+    {
+        var valid = new GameRulesDocument { rulesetId = "self-test" };
+        Assert(GameRulesValidator.TryValidate(valid, out _), "default rules document should validate");
+        valid.pvp_1v1.movement.slideEndSpeed = valid.pvp_1v1.movement.slideStartSpeed + 1f;
+        Assert(!GameRulesValidator.TryValidate(valid, out string slideError)
+            && slideError.Contains("slideEndSpeed", StringComparison.Ordinal),
+            "slide end speed above start speed must be rejected");
+        valid.pvp_1v1.movement.slideEndSpeed = 1.5f;
+        valid.pvp_1v1.weapon = null!;
+        Assert(!GameRulesValidator.TryValidate(valid, out string missingError)
+            && missingError.Contains("pvp_1v1.weapon", StringComparison.Ordinal),
+            "missing weapon rules must be rejected");
+        string hash = GameRulesHash.Compute(new byte[] { 1, 2, 3 });
+        Assert(hash.Length == 64, "rules content hash must be SHA-256 hex");
     }
 
     private static void SpawnContractMatchesSceneOrder()

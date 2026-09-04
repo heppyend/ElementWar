@@ -812,7 +812,7 @@ PlayerSettings:
   webGLMemoryGeometricGrowthCap: 96
   webGLPowerPreference: 2
   scriptingDefineSymbols:
-    Standalone: MAGICACLOTH2;UNITY_PIPELINE_URP
+    Standalone: MAGICACLOTH2;UNITY_PIPELINE_URP;BBBNEXUS_HAS_UAR;BBBNEXUS_HAS_CINEMACHINE
   additionalCompilerArguments: {}
   platformArchitecture: {}
   scriptingBackend: {}
