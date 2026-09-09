@@ -152,3 +152,7 @@ dotnet run
 ## 公开内容边界
 
 公开仓库主要提供代码、服务器、配置和技术链路说明。第三方模型、动画、音频、贴图、Prefab、场景和框架源码不随仓库重新分发，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+## 协作
+
+项目整理与公开版本收口由项目作者与 OpenAI Codex 协作完成。
