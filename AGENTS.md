@@ -37,15 +37,8 @@ There is no CI/CD or headless build pipeline configured.
 | `com.unity.animation.rigging@1.2.1` | Animation rigging (IK constraints for weapon aiming: `TwoBoneIKConstraint`, `MultiAimConstraint`) — ⚠️ 见下方 Hunter 例外 |
 | `com.unity.ai.navigation@1.1.7` | NavMesh (NavMeshSurface baking, NavMeshAgent for enemy chase + AI companion follow) |
 | `com.unity.probuilder@5.2.4` | In-editor level prototyping |
-| CLazyRunnerActionAnimPack | 跑酷动作包（`Assets/CLazyRunnerActionAnimPack/`），提供全部移动/跳跃/滑铲动画片段 |
 
-### 新增资源包（2026-08-17 加入，勿删）
-
-| 资源包 | 目录 | 内容 |
-|--------|------|------|
-| 武器音效包 | `Assets/PostApocalypseGuns/` | 按枪种（步枪/手枪/霰弹/狙击/机枪）分的 .wav 枪声，1p/3p/far 变体 |
-| TPS 人物动作包 | `Assets/Rifle_01_v25/` | MotusMan_v2 人物 + M4_Rifle_01 步枪 + 步枪动画（FBX/Animation）+ `RH_WP Avatar Mask.mask` + Docs |
-| 二次元人物动作包及模型 | `Assets/CombatGirlsCharacterPack/` | RifleGirl / Humanoid_Bot（模型/材质/动画/预制体）+ Biperworks_Tools 武器控制 + 示例场景 |
+> 公开版不包含未确认再分发权的第三方模型、动画、音频、贴图、Prefab、场景或 Asset Store 包。以下历史资源路径仅存在于私有开发记录中，不是当前公开基线。
 
 ## Architecture
 
@@ -55,7 +48,7 @@ There is no CI/CD or headless build pipeline configured.
 > - [`Assets/Scripts/Editor/AGENTS.md`](Assets/Scripts/Editor/AGENTS.md) — 编辑器向导：Tools/玩家 + Tools/场景 铁律
 > - [`Assets/Scripts/FPS/AGENTS.md`](Assets/Scripts/FPS/AGENTS.md) — FPS 原型框架（New Scene 沙盒）
 > - [`Assets/Scripts/Network/AGENTS.md`](Assets/Scripts/Network/AGENTS.md) — PVP 网络同步：UDP 权威框架 / 简化移动 / 服务器 Server/（.NET）
-> - [`Assets/Resource/Models/AGENTS.md`](Assets/Resource/Models/AGENTS.md) — 模型导入：MMD/URP/Blender 手册
+> - 模型导入与 MMD/PMX 适配资料不随公开版提供；需要相关内容时必须在独立私有工作区按原许可证处理。
 
 > 模块级细节见上；以下是全局架构摘要：
 
@@ -109,8 +102,7 @@ PlayerWeapon : MonoBehaviour
 
 WeaponAudio : MonoBehaviour（可替换音效组件，挂在 PlayerWeapon 同物体）
   → 订阅 PlayerWeapon.Fired 播枪声；fireClips 数组在 Inspector 里自由替换/增删即换枪声
-  → 当前分配：荧 M4A1 = AR_1p_01/02，芙宁娜 AK47 = AutoGun_1p_01/02（Assets/PostApocalypseGuns/AssaultRifles/）
-  → 挂载走 Tools/玩家/给两把枪挂载音效组件（M4/AK）（WeaponAudioWizard，幂等）
+  → 公开版不附带音频文件或枪械 Prefab；合法取得资源后由使用者在 Unity Inspector 中配置
 
 PlayerWeaponBullet : MonoBehaviour
   → Rigidbody-based projectile (flyPower=30) + 帧间 Raycast 防穿透
@@ -196,16 +188,10 @@ Aiming is checked in `PlayerStateBase.Update()` every frame — when `isAiming` 
 | Input actions asset | `Assets/Settings/InputSystem/MyInputSystem.inputactions` |
 | Auto-generated input C# | `Assets/Settings/InputSystem/MyInputSystem.cs` (do not hand-edit) |
 | URP settings | `Assets/Settings/` (3 quality tiers: Performant, Balanced, HighFidelity) |
-| 角色模型 | `Assets/Resource/Models/`（Lumine / Pilot Furina / 暗夜猎人 / 丘丘人 / gallardo） |
-| 角色预制体 | `Assets/Resource/Prefabs/`（`Lumine FBX.prefab` / `Pilot Furina.prefab` / `Hunter.prefab` / `丘丘人.prefab` / `HealthBar.prefab`） |
-| 移动/瞄准控制器 | `Assets/Resource/Animations/Player/`（`TPS_Movement.controller` 三角色共用 / `Hunter_Parkour.controller` Hunter 专属） |
-| 跑酷动作包 | `Assets/CLazyRunnerActionAnimPack/` |
-| 武器音效包（08-17 新加） | `Assets/PostApocalypseGuns/`（按枪种 .wav 枪声，1p/3p/far） |
-| TPS 人物动作包（08-17 新加） | `Assets/Rifle_01_v25/`（MotusMan + M4 步枪 + 步枪动画 + Avatar Mask） |
-| 二次元人物动作包及模型（08-17 新加） | `Assets/CombatGirlsCharacterPack/`（RifleGirl/Humanoid_Bot + 动画 + 武器控制） |
-| Toon shader plugin | `Assets/Plugins/YSA Toon/` |
-| 特效插件 | `Assets/Plugins/EffectCore/` |
-| Main scene | `Assets/Scenes/PVEGame.unity`（GameStart 为主菜单；`PVPGame.unity` 为在线模式；`New Scene.unity` 为 FPS 沙盒实验场） |
+| 角色、动画、音频和场景资源 | 公开版不随仓库分发；由使用者从合法来源自行取得 |
+| 运行时代码 | `Assets/Scripts/` |
+| 输入与 URP 配置 | `Assets/Settings/` |
+| 主工程配置 | `ProjectSettings/` |
 
 ## Editor Tools（Tools/玩家 菜单）
 
@@ -220,7 +206,7 @@ Aiming is checked in `PlayerStateBase.Update()` every frame — when `isAiming` 
 | `给选中物体添加/移除 NavMeshObstacle`（Tools/场景） | 墙/柱子阻挡寻路（carving 动态避障，不用重烘焙） |
 | `把选中物体烘焙为可行走并重烘焙`（Tools/场景） | 斜坡/楼梯/平台设为可行走面并重烘焙 |
 
-> ⚠️ **08-17 工具清理**：Tools/玩家 菜单已精简——武器 IK 修复/诊断/还原、Hunter 接入/跑酷/无武器化等一次性工具已删除（`AddHunterToGameWizard` / `ApplyHunterParkourWizard` / `RemoveHunterWeaponWizard` / `FixHunterAimWizard` / `RestoreWeaponsLikeFurinaWizard` / `RefineWeaponIKTargetsWizard` / `WeaponIKDiagnosticWizard` / `DiagnoseWeaponsAndIKWizard` / `RestoreRootMotionMovementWizard` / `RestoreFurinaFromPrefabWizard`）。「还原 NavMesh 备份」为手动操作：把 `_Backup_NavMesh_*` 的 Game.unity 复制回 `Assets/Scenes/`。
+> ⚠️ **公开版边界**：Tools/玩家 菜单中的场景、Prefab、模型和资源写入操作只描述已有代码能力，不代表公开仓库包含对应内容；任何 Unity GUI 资源配置都需要使用者在合法取得资源后自行完成。
 
 ## Code Conventions
 

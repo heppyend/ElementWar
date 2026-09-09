@@ -1,6 +1,6 @@
 # Assets/Scripts/FPS — Hunter/FPS 实验沙盒
 
-> 此模块服务 `Assets/Scenes/New Scene.unity`，不是 PVE/PVP 构建主路径。改动前先确认需求确实针对实验沙盒；所有相机、Rig、Animator、武器和场景配置由用户在 Unity GUI 完成。
+> 此模块是 FPS 代码实验沙盒，不是 PVE/PVP 构建主路径。公开版不包含其实验场景和第三方表现资源；所有相机、Rig、Animator、武器和场景配置由使用者在合法取得资源后通过 Unity GUI 完成。
 
 ## 结构
 
