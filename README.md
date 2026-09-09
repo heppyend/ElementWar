@@ -78,22 +78,13 @@ NetClient
 
 ### FPS 沙盒
 
-`Assets/Scripts/FPS` 与 `Assets/Scenes/New Scene.unity` 用于隔离实验移动、相机和瞄准，不是 PVE/PVP 正式路径。它与 PVE 存在明显重复，武器开火仍有 TODO。短期只保留为 3C 试验场，不继续复制正式玩法代码。
+`Assets/Scripts/FPS` 是隔离移动、相机和瞄准实验的代码沙盒，不是 PVE/PVP 正式路径。公开版不包含其实验场景和配套第三方资源；代码仅作为 3C 研究记录保留。
 
-## 4. 2026-09-02 工作区整理结果
+## 4. 公开版整理结果
 
-### 必须保留，不能自动清理
+公开版已从当前树和 `master` 历史中移除未确认拥有再分发权的模型、动画、音频、贴图、Prefab、场景、插件包及其导入元数据。原始私有内容不随本仓库发布；需要完整 Unity 内容时，应从合法来源重新取得并按原许可证安装。
 
-当前 Git 工作区有四组 Unity 资源变化：
-
-- `Assets/Resource/Animations/FPS/FPS_Hunter.controller`：移动混合树引用改到新 FBX；
-- `Assets/Scenes/New Scene.unity`：两个 Transform 的极小浮点旋转变化；
-- `Assets/Resource/Animations/Player/卡拉彼丘拆包.meta`；
-- `Assets/Resource/Animations/Player/卡拉彼丘拆包/HuiXing_Run_Fixed.fbx` 及其 `.meta`。
-
-这些变化彼此有关，像是一次 Hunter/FPS 动画试验，而不是无意义垃圾。它们涉及 Animator、Scene 和导入资源，已原样保留，需由用户在 Unity 中确认动画效果后再决定提交或放弃。
-
-### 可再生成，但不属于 Git 脏工作区
+### 本地可再生成内容
 
 - `Library`：约 4.75 GB；Unity 导入缓存，清除会触发完整重导入；
 - `.vs`：约 9 MB；IDE 索引和布局；
@@ -103,9 +94,7 @@ NetClient
 
 它们都已被 `.gitignore` 排除。本轮没有为了“看起来干净”而删除正在使用或会导致大规模重导入的缓存。需要释放空间时，应先关闭 Unity 和 IDE，再通过 Unity 重新生成工程文件。
 
-### 公开版本中的资源处理
-
-第三方模型、动画、音频、贴图、Prefab、Asset Store 包和示例不随公开仓库分发。需要这些内容的本地开发者必须自行取得合法授权，并按原许可证安装。
+缓存、IDE 索引、编译产物和 Unity 自动生成的工程文件不属于公开源码边界，继续由 `.gitignore` 排除。
 
 ## 5. 主要问题与优先级
 
