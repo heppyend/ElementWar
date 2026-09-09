@@ -18,6 +18,8 @@ namespace ElementWar.Net
     {
         private NetClient _net;
         private Canvas _canvas;
+        private RectTransform _legacyHealthRoot;
+        private TextMeshProUGUI _legacyAimDot;
         private Image _healthFill;
         private TextMeshProUGUI _healthText;
         private TextMeshProUGUI _scoreboardText;
@@ -84,9 +86,12 @@ namespace ElementWar.Net
             if (_net == null || _net.LocalModel == null) return;
 
             // 血量条
-            float ratio = (float)_net.LocalModel.currentHealth / Mathf.Max(1, _net.LocalModel.maxHealth);
-            _healthFill.fillAmount = ratio;
-            _healthText.text = $"{_net.LocalModel.currentHealth}/{_net.LocalModel.maxHealth}";
+            if (_healthFill != null && _healthText != null)
+            {
+                float ratio = (float)_net.LocalModel.currentHealth / Mathf.Max(1, _net.LocalModel.maxHealth);
+                _healthFill.fillAmount = ratio;
+                _healthText.text = $"{_net.LocalModel.currentHealth}/{_net.LocalModel.maxHealth}";
+            }
 
             // 计分板（bot 用负数 id，显示「Bot」；训练模式=有机器人在场）
             var sb = new System.Text.StringBuilder();
@@ -101,7 +106,20 @@ namespace ElementWar.Net
             _scoreboardText.text = sb.ToString();
 
             // 死亡重生提示：轮询 isDead
-            _deathOverlay.gameObject.SetActive(_net.LocalModel.isDead);
+            if (_deathOverlay != null)
+                _deathOverlay.gameObject.SetActive(_net.LocalModel.isDead);
+        }
+
+        /// <summary>
+        /// 新版场景 HUD 接管本地血条与准星时调用。
+        /// 计分板、死亡重生提示和结算面板仍由本组件保留。
+        /// </summary>
+        public void SetLegacyCombatHudVisible(bool visible)
+        {
+            if (_legacyHealthRoot != null)
+                _legacyHealthRoot.gameObject.SetActive(visible);
+            if (_legacyAimDot != null)
+                _legacyAimDot.gameObject.SetActive(visible);
         }
 
         // ---------------- UI 构建 ----------------
@@ -118,18 +136,18 @@ namespace ElementWar.Net
             scaler.referenceResolution = new Vector2(1920, 1080);
 
             // 本地血量条（左上）
-            var healthRoot = NewRect("HealthBar", new Vector2(40, 1040), new Vector2(360, 36));
-            var bg = NewImage("BG", healthRoot, new Vector2(0, 0), new Vector2(360, 36));
+            _legacyHealthRoot = NewRect("HealthBar", new Vector2(40, 1040), new Vector2(360, 36));
+            var bg = NewImage("BG", _legacyHealthRoot, new Vector2(0, 0), new Vector2(360, 36));
             bg.color = new Color(0, 0, 0, 0.5f);
-            var fill = NewImage("Fill", healthRoot, new Vector2(0, 0), new Vector2(350, 26));
+            var fill = NewImage("Fill", _legacyHealthRoot, new Vector2(0, 0), new Vector2(350, 26));
             fill.color = new Color(0.2f, 0.9f, 0.3f, 0.9f);
             fill.type = Image.Type.Filled;
             fill.fillMethod = Image.FillMethod.Horizontal;
             _healthFill = fill;
-            _healthText = NewText("HealthText", healthRoot, new Vector2(0, 0), new Vector2(360, 36), "100/100", 20, TextAlignmentOptions.Center);
+            _healthText = NewText("HealthText", _legacyHealthRoot, new Vector2(0, 0), new Vector2(360, 36), "100/100", 20, TextAlignmentOptions.Center);
 
             // 屏幕中心瞄准点（十字）
-            NewText("AimDot", _canvas.transform, Vector2.zero, new Vector2(40, 40), "+", 36, TextAlignmentOptions.Center);
+            _legacyAimDot = NewText("AimDot", _canvas.transform, Vector2.zero, new Vector2(40, 40), "+", 36, TextAlignmentOptions.Center);
 
             // 计分板（右上）
             var scoreRoot = NewRect("Scoreboard", new Vector2(1520, 1040), new Vector2(360, 120));

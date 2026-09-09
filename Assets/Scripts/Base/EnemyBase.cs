@@ -122,8 +122,6 @@ public abstract class EnemyBase : MonoBehaviour, IStateMachineOwner
         #endregion
     }
 
-
-
     /// <summary>
     /// 寻找离自身最近的PlayerModel
     /// </summary>
@@ -225,12 +223,6 @@ public abstract class EnemyBase : MonoBehaviour, IStateMachineOwner
         #endregion
     }
 
-
-
-
-
-
-
     /// <summary>
     /// 是否存在攻击目标
     /// </summary>
@@ -252,7 +244,6 @@ public abstract class EnemyBase : MonoBehaviour, IStateMachineOwner
         }
         return false;
     }
-
 
     /// <summary>
     /// 追击目标
@@ -289,7 +280,4 @@ public abstract class EnemyBase : MonoBehaviour, IStateMachineOwner
         stateMachine.Stop();
         Destroy(gameObject);
     }
-
-
-
 }

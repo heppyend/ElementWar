@@ -156,6 +156,7 @@ namespace ElementWar.Net
         {
             IsDead = false;
             transform.position = new Vector3(e.x, e.y, e.z);
+            transform.rotation = Quaternion.Euler(0f, e.bodyYawDeg, 0f);
             _buffer.Clear();
             _renderInited = false;   // 重生：重新对齐渲染游标到新缓冲开头
         }

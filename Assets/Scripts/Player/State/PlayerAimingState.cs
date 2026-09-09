@@ -36,6 +36,10 @@ public class PlayerAimingState : PlayerStateBase
 
     public override void Update()
     {
+        // 暂停菜单打开时，InputSystem 仍会更新鼠标；必须在状态层阻断 AimTarget 的屏幕射线。
+        if (playerController != null && playerController.IsGameplayPaused)
+            return;
+
         base.Update();
         if (IsBeControl()) {
 

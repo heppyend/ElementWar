@@ -36,6 +36,7 @@ namespace ElementWar.Net
         private UdpSocket _socket;
         private bool _connected;
         private bool _matchEnded;
+        private bool _localGameplayPaused;
         private int _playerId;
         private int _serverTickRate = 60;
         private string _serverSessionId = "";
@@ -51,6 +52,14 @@ namespace ElementWar.Net
         private int _pingSequence;
         private int _lastSnapshotSequence;
         private bool _hasSnapshotSequence;
+        private bool _hasLocalSnapshot;
+        private int _localHealth;
+        private int _localMaxHealth;
+        private int _localMagazineAmmo;
+        private int _localReserveAmmo;
+        private bool _localIsReloading;
+        private float _localReloadCompletesAtSeconds;
+        private float _lastSnapshotReceivedAtRealtime;
         private int _snapshotLossCount;
         private int _outOfOrderSnapshotCount;
         private int _hardCorrectionCount;
@@ -89,7 +98,30 @@ namespace ElementWar.Net
         public bool Connected => _connected;
         public PlayerModel LocalModel => _localModel;
         public PvPMotor LocalMotor => _localMotor;
-        public int LocalHealth => _localModel != null ? _localModel.currentHealth : 0;
+        /// <summary>本地玩家最近一份服务器快照；PVP HUD 只读这些权威值。</summary>
+        public bool HasLocalSnapshot => _hasLocalSnapshot;
+        public int LocalHealth => _hasLocalSnapshot ? _localHealth : _localModel != null ? _localModel.currentHealth : 0;
+        public int LocalMaxHealth => _hasLocalSnapshot ? _localMaxHealth : _localModel != null ? _localModel.maxHealth : 0;
+        public int LocalMagazineAmmo => _localMagazineAmmo;
+        public int LocalReserveAmmo => _localReserveAmmo;
+        public bool LocalIsReloading => _localIsReloading;
+        public int LocalCharacterId => characterId;
+        public string LocalPlayerName => playerName;
+        public bool LocalIsAiming => _aiming;
+        public bool LocalIsFiring => _fire;
+        /// <summary>以最近服务器 tick 加本地真实时间估算的权威换弹进度。</summary>
+        public float LocalReloadProgress
+        {
+            get
+            {
+                if (!_localIsReloading || _localReloadCompletesAtSeconds <= 0f || _serverTickRate <= 0 || _rules == null)
+                    return 0f;
+                float duration = Mathf.Max(0.001f, _rules.pvp_1v1.weapon.reloadDurationSeconds);
+                float estimatedServerNow = _lastServerTick / (float)_serverTickRate
+                    + (Time.realtimeSinceStartup - _lastSnapshotReceivedAtRealtime);
+                return Mathf.Clamp01(1f - (_localReloadCompletesAtSeconds - estimatedServerNow) / duration);
+            }
+        }
         public float EstimatedRttMs => _estimatedRtt * 1000f;
         public int SnapshotLossCount => _snapshotLossCount;
         public int OutOfOrderSnapshotCount => _outOfOrderSnapshotCount;
@@ -103,6 +135,11 @@ namespace ElementWar.Net
         public int InputTick => _inputTick;
         public int LastSnapshotSequence => _lastSnapshotSequence;
         public bool MatchEnded => _matchEnded;
+        /// <summary>
+        /// 本地 PVP 菜单暂停：只抑制本机玩法输入，网络收包、心跳和零输入上报仍持续。
+        /// 绝不等同于暂停服务器或其他客户端。
+        /// </summary>
+        public bool IsLocalGameplayPaused => _localGameplayPaused;
 
         /// <summary>计分板：playerId → score（由快照更新，PVPHealthUI 读取）。</summary>
         public readonly Dictionary<int, int> Scores = new();
@@ -112,6 +149,8 @@ namespace ElementWar.Net
         public event Action OnLocalDied;
         /// <summary>对局结束（UI 弹结束面板），参数为胜者 playerId。</summary>
         public event Action<int> OnMatchEnded;
+        /// <summary>服务器确认命中静态场景时触发；弹孔/火花表现只能订阅这个事件，不能自行判定命中面。</summary>
+        public event Action<Vector3, Vector3, string> OnAuthoritativeStaticSurfaceHit;
 
         private void Awake()
         {
@@ -123,6 +162,12 @@ namespace ElementWar.Net
                 Debug.LogError($"[NetClient] 规则校验失败，禁止连接服务器：{rulesError}");
             else
                 _fireRequestInterval = _rules.pvp_1v1.weapon.fireCooldownSeconds;
+
+            // 静态玩法几何由用户手动烘焙；没有 Profile 时保留旧地图的安全回退，避免测试场景失去碰撞。
+            if (PvpCollisionWorld.TryUseBakedProfile(out string collisionProfileError))
+                Debug.Log($"[NetClient] 已加载 PVP 场景碰撞 Profile hash={PvpCollisionWorld.ActiveProfileHash}");
+            else
+                Debug.LogWarning($"[NetClient] 未加载 PVP 场景碰撞 Profile，使用旧掩体回退：{collisionProfileError}");
             // 兜底：确保左上角信息窗存在（NetworkLauncher 可能因组件缺失提前 return 没创建）
             if (FindObjectOfType<DebugInfoWindow>() == null)
                 new GameObject("DebugInfoWindow").AddComponent<DebugInfoWindow>();
@@ -199,23 +244,19 @@ namespace ElementWar.Net
             // 终局面板显示后停止继续采样/发送输入，避免后台相机和网络状态继续变化。
             if (_matchEnded) return;
 
-            SampleInput();
-            if (_localMotor != null) PushInputToMotor();
-            if (_localAimTarget != null) _localAimTarget.position = _aimPoint; // 瞄准 IK 目标跟准心
-
-            // 位移和输入上报使用同一个固定 tick；渲染帧率不再参与运动积分。
-            if (_localModel != null && !_localModel.isDead)
+            if (_localGameplayPaused)
             {
-                _inputAccumulator += Time.deltaTime;
-                float tickDelta = 1f / Mathf.Max(1, _serverTickRate);
-                int catchUpSteps = 0;
-                while (_inputAccumulator >= tickDelta && catchUpSteps < 4)
-                {
-                    _inputAccumulator -= tickDelta;
-                    SendAndPredictInput(tickDelta);
-                    catchUpSteps++;
-                }
-                if (catchUpSteps == 4) _inputAccumulator = Mathf.Min(_inputAccumulator, tickDelta);
+                // 保持连接且连续上报零输入，让服务器立即停止该角色；不能因本地菜单停止网络 tick。
+                ClearGameplayInput();
+                if (_localMotor != null) PushInputToMotor();
+                AdvanceInputTicks(Time.unscaledDeltaTime);
+            }
+            else
+            {
+                SampleInput();
+                if (_localMotor != null) PushInputToMotor();
+                if (_localAimTarget != null) _localAimTarget.position = _aimPoint; // 瞄准 IK 目标跟准心
+                AdvanceInputTicks(Time.deltaTime);
             }
 
             if (Time.unscaledTime >= _nextPingTime) SendPing();
@@ -227,6 +268,49 @@ namespace ElementWar.Net
             }
             if (_reload && _localModel != null && !_localModel.isDead)
                 SendReload();
+        }
+
+        /// <summary>
+        /// PVP 本地菜单调用：网络保持连接，但所有战斗意图归零并冻结相机输入。
+        /// </summary>
+        public void SetLocalGameplayPaused(bool value)
+        {
+            if (_localGameplayPaused == value) return;
+            _localGameplayPaused = value;
+            ClearGameplayInput();
+            if (_localMotor != null) PushInputToMotor();
+            if (_camRig == null) _camRig = FindObjectOfType<PVPCameraRig>();
+            if (_camRig != null) _camRig.SetGameplayInputEnabled(!value);
+        }
+
+        private void AdvanceInputTicks(float frameDelta)
+        {
+            if (_localModel == null || _localModel.isDead) return;
+
+            _inputAccumulator += frameDelta;
+            float tickDelta = 1f / Mathf.Max(1, _serverTickRate);
+            int catchUpSteps = 0;
+            while (_inputAccumulator >= tickDelta && catchUpSteps < 4)
+            {
+                _inputAccumulator -= tickDelta;
+                SendAndPredictInput(tickDelta);
+                catchUpSteps++;
+            }
+            if (catchUpSteps == 4) _inputAccumulator = Mathf.Min(_inputAccumulator, tickDelta);
+        }
+
+        private void ClearGameplayInput()
+        {
+            _moveInput = Vector2.zero;
+            _worldMove = Vector3.zero;
+            _sprint = false;
+            _aiming = false;
+            _fire = false;
+            _jumping = false;
+            _slide = false;
+            _reload = false;
+            _jumpHoldUntil = 0f;
+            _slideHoldUntil = 0f;
         }
 
         // ---------------- 输入采样 ----------------
@@ -374,6 +458,11 @@ namespace ElementWar.Net
 
         private void SendFire()
         {
+            // 弹药状态以最近一次服务器快照为准。服务器仍会再次校验，
+            // 客户端这里负责避免 HUD 已显示 0 发后继续播放本地开火视觉。
+            if (!_hasLocalSnapshot || _localIsReloading || _localMagazineAmmo <= 0)
+                return;
+
             // 客户端射速限制：与 PVE PlayerWeapon.bulletInterval 一致（0.15s）——
             // 否则按住开火每帧都发 FireRequest + 刷枪口/音效，视觉和带宽都爆
             if (Time.time - _lastFireRequestTime < _fireRequestInterval) return;
@@ -504,7 +593,8 @@ namespace ElementWar.Net
             // 生成本地玩家
             if (spawner != null)
             {
-                _localModel = spawner.SpawnLocal(characterId, _playerId);
+                _localModel = spawner.SpawnLocal(characterId, _playerId,
+                    new Vector3(w.spawnX, w.spawnY, w.spawnZ), w.spawnBodyYawDeg);
                 if (_localModel != null)
                 {
                     _localMotor = _localModel.gameObject.GetComponent<PvPMotor>();
@@ -546,6 +636,9 @@ namespace ElementWar.Net
 
         private void HandleShot(ShotEventMessage shot)
         {
+            if (!string.IsNullOrEmpty(shot.surfaceId))
+                OnAuthoritativeStaticSurfaceHit?.Invoke(new Vector3(shot.endX, shot.endY, shot.endZ),
+                    new Vector3(shot.surfaceNormalX, shot.surfaceNormalY, shot.surfaceNormalZ), shot.surfaceId);
             if (shot.shooterPlayerId == _playerId) return; // 本地已即时播放
             if (_remotes.TryGetValue(shot.shooterPlayerId, out var shooter))
                 shooter.PlayFire(new Vector3(shot.endX, shot.endY, shot.endZ));
@@ -613,6 +706,7 @@ namespace ElementWar.Net
             _hasSnapshotSequence = true;
             _lastSnapshotSequence = snap.snapshotSequence;
             _lastServerTick = Mathf.Max(_lastServerTick, snap.serverTick);
+            _lastSnapshotReceivedAtRealtime = Time.realtimeSinceStartup;
 
             // 自己的状态 → 预测校正
             var alive = new HashSet<int>(); // 本快照在场玩家（修剪 Scores/BotIds 用）
@@ -625,6 +719,13 @@ namespace ElementWar.Net
                 else BotIds.Remove(ps.playerId);
                 if (ps.playerId == _playerId)
                 {
+                    _hasLocalSnapshot = true;
+                    _localHealth = ps.health;
+                    _localMaxHealth = ps.maxHealth;
+                    _localMagazineAmmo = ps.magazineAmmo;
+                    _localReserveAmmo = ps.reserveAmmo;
+                    _localIsReloading = ps.isReloading;
+                    _localReloadCompletesAtSeconds = ps.reloadCompletesAtSeconds;
                     ReconcileLocal(ps);
                     if (_localModel != null && _localModel.weapon != null)
                         _localModel.weapon.ApplyAuthoritativeAmmo(ps.magazineAmmo, ps.reserveAmmo, ps.isReloading);
@@ -783,7 +884,7 @@ namespace ElementWar.Net
             _inputTick = Mathf.Max(_inputTick, e.serverTick);
             _pendingInputs.Clear();
             if (_localMotor != null)
-                _localMotor.Teleport(new Vector3(e.x, e.y, e.z), _playerId % 2 == 0 ? 0f : 180f);
+                _localMotor.Teleport(new Vector3(e.x, e.y, e.z), e.bodyYawDeg);
             if (_localModel != null)
                 _localModel.ApplyRespawnNetwork(new Vector3(e.x, e.y, e.z), e.health, e.maxHealth);
         }

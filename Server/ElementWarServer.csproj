@@ -14,6 +14,7 @@
     <Compile Include="..\Assets\Scripts\Gameplay\Rules\GameRulesContracts.cs" Link="Rules\GameRulesContracts.cs" />
     <Compile Include="..\Assets\Scripts\Gameplay\Rules\GameRulesValidator.cs" Link="Rules\GameRulesValidator.cs" />
     <Compile Include="..\Assets\Scripts\Gameplay\Rules\GameRulesHash.cs" Link="Rules\GameRulesHash.cs" />
+    <Compile Include="..\Assets\Scripts\Network\Collision\PvpArenaCollisionProfile.cs" Link="Collision\PvpArenaCollisionProfile.cs" />
   </ItemGroup>
 
 </Project>

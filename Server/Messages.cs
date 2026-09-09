@@ -30,6 +30,10 @@ public sealed class ServerWelcomeMessage
     [JsonPropertyName("rulesSchemaVersion")] public int RulesSchemaVersion { get; set; }
     [JsonPropertyName("rulesetId")] public string RulesetId { get; set; } = string.Empty;
     [JsonPropertyName("rulesContentHash")] public string RulesContentHash { get; set; } = string.Empty;
+    [JsonPropertyName("spawnX")] public float SpawnX { get; set; }
+    [JsonPropertyName("spawnY")] public float SpawnY { get; set; }
+    [JsonPropertyName("spawnZ")] public float SpawnZ { get; set; }
+    [JsonPropertyName("spawnBodyYawDeg")] public float SpawnBodyYawDeg { get; set; }
 }
 
 public sealed class RulesRejectedMessage
@@ -155,6 +159,7 @@ public sealed class PlayerSnapshotMessage
     [JsonPropertyName("magazineAmmo")] public int MagazineAmmo { get; set; }
     [JsonPropertyName("reserveAmmo")] public int ReserveAmmo { get; set; }
     [JsonPropertyName("isReloading")] public bool IsReloading { get; set; }
+    [JsonPropertyName("reloadCompletesAtSeconds")] public float ReloadCompletesAtSeconds { get; set; }
 }
 
 public sealed class ShotEventMessage
@@ -169,6 +174,10 @@ public sealed class ShotEventMessage
     [JsonPropertyName("endX")] public float EndX { get; set; }
     [JsonPropertyName("endY")] public float EndY { get; set; }
     [JsonPropertyName("endZ")] public float EndZ { get; set; }
+    [JsonPropertyName("surfaceNormalX")] public float SurfaceNormalX { get; set; }
+    [JsonPropertyName("surfaceNormalY")] public float SurfaceNormalY { get; set; }
+    [JsonPropertyName("surfaceNormalZ")] public float SurfaceNormalZ { get; set; }
+    [JsonPropertyName("surfaceId")] public string SurfaceId { get; set; } = string.Empty;
 }
 
 public sealed class HitEventMessage
@@ -215,6 +224,7 @@ public sealed class RespawnEventMessage
     [JsonPropertyName("x")] public float X { get; set; }
     [JsonPropertyName("y")] public float Y { get; set; }
     [JsonPropertyName("z")] public float Z { get; set; }
+    [JsonPropertyName("bodyYawDeg")] public float BodyYawDeg { get; set; }
     [JsonPropertyName("health")] public int Health { get; set; }
     [JsonPropertyName("maxHealth")] public int MaxHealth { get; set; }
 }

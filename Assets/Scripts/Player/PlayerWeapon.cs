@@ -29,17 +29,37 @@ public class PlayerWeapon : MonoBehaviour
     public int initialReserveAmmo = 90;
     public int weaponDamage = 10;
     public float reloadDuration = 1.5f;
-    [Header("临时调试显示")]
-    public bool showAmmoDebugLabel = true;
+    [Header("曳光视觉（Inspector 调试）")]
+    public bool showTracer = true;
+    [Min(0.01f)] public float tracerMaxRange = 200f;
+    [Min(0.001f)] public float tracerLifetime = 0.06f;
+    [Min(0.001f)] public float tracerStartWidth = 0.03f;
+    [Min(0.001f)] public float tracerEndWidth = 0.004f;
+    public Color tracerStartColor = new Color(1f, 0.95f, 0.55f, 0.9f);
+    public Color tracerEndColor = new Color(1f, 0.5f, 0.15f, 0.2f);
+    [Tooltip("可选。留空时使用代码生成的默认透明材质。")]
+    public Material tracerMaterial;
+
+    [Header("弹孔视觉（Inspector 调试）")]
+    public bool showBulletHoles = true;
+    [Min(0.001f)] public float bulletHoleSize = 0.13f;
+    [Min(0.01f)] public float bulletHoleLifetime = 4f;
+    [Min(0f)] public float bulletHoleSurfaceOffset = 0.002f;
+    public bool randomizeBulletHoleRotation = true;
+    [Tooltip("可选。留空时使用代码生成的程序化弹孔材质。")]
+    public Material bulletHoleMaterial;
 
     private Queue<PlayerWeaponBullet> bulletPool = new Queue<PlayerWeaponBullet>();//子弹对象池
     private WeaponRuntime combatRuntime;
     private long nextCombatRequestId;
-    private static GUIStyle ammoDebugStyle;
-
+    private float reloadStartedAt = -1f;
     public int MagazineAmmo => combatRuntime != null ? combatRuntime.MagazineAmmo : initialMagazineAmmo;
     public int ReserveAmmo => combatRuntime != null ? combatRuntime.ReserveAmmo : initialReserveAmmo;
     public bool IsReloading => combatRuntime != null && combatRuntime.IsReloading;
+    /// <summary>本地 PVE 换弹的归一化进度；未换弹时为 0。</summary>
+    public float ReloadProgress => !IsReloading || reloadStartedAt < 0f
+        ? 0f
+        : Mathf.Clamp01((Time.time - reloadStartedAt) / Mathf.Max(0.001f, reloadDuration));
 
     private void Awake()
     {
@@ -49,25 +69,11 @@ public class PlayerWeapon : MonoBehaviour
 
     private void Update()
     {
-        if (combatRuntime != null && combatRuntime.TryCompleteReload(Time.time, out CombatResult result)) CombatResolved?.Invoke(result);
-    }
-
-    private void OnGUI()
-    {
-        if (!showAmmoDebugLabel) return;
-        PlayerModel player = GetComponentInParent<PlayerModel>();
-        Camera camera = Camera.main;
-        if (player == null || camera == null) return;
-        Vector3 screen = camera.WorldToScreenPoint(player.transform.position + Vector3.up * 2.1f);
-        if (screen.z <= 0f) return;
-        if (ammoDebugStyle == null) ammoDebugStyle = new GUIStyle(GUI.skin.label) { fontSize = 16, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleLeft };
-        Rect rect = new Rect(screen.x + 18f, Screen.height - screen.y - 12f, 150f, 28f);
-        Color previous = GUI.color;
-        GUI.color = new Color(0f, 0f, 0f, 0.65f);
-        GUI.Box(new Rect(rect.x - 4f, rect.y - 2f, rect.width, rect.height), GUIContent.none);
-        GUI.color = MagazineAmmo > 0 ? Color.white : new Color(1f, 0.45f, 0.45f);
-        GUI.Label(rect, $"{MagazineAmmo}/{MagazineAmmo + ReserveAmmo}{(IsReloading ? " 换弹中" : string.Empty)}", ammoDebugStyle);
-        GUI.color = previous;
+        if (combatRuntime != null && combatRuntime.TryCompleteReload(Time.time, out CombatResult result))
+        {
+            reloadStartedAt = -1f;
+            CombatResolved?.Invoke(result);
+        }
     }
 
     /// <summary>
@@ -108,6 +114,8 @@ public class PlayerWeapon : MonoBehaviour
     {
         if (combatRuntime == null) return false;
         CombatResult result = combatRuntime.Resolve(new CombatRequest(++nextCombatRequestId, CombatIntentType.Reload, Time.time));
+        if (result.kind == CombatResultKind.ReloadStarted)
+            reloadStartedAt = Time.time;
         CombatResolved?.Invoke(result);
         return result.kind == CombatResultKind.ReloadStarted;
     }
@@ -115,6 +123,7 @@ public class PlayerWeapon : MonoBehaviour
     public void ApplyAuthoritativeAmmo(int magazineAmmo, int reserveAmmo, bool isReloading)
     {
         combatRuntime?.ApplyAuthoritativeState(magazineAmmo, reserveAmmo, isReloading);
+        reloadStartedAt = isReloading ? Time.time : -1f;
     }
 
     /// <summary>
@@ -153,7 +162,8 @@ public class PlayerWeapon : MonoBehaviour
     /// <summary>沿开火方向射线确定视觉终点，画曳光 + 在环境表面贴弹孔（角色身上不贴）。</summary>
     private void SpawnTracerAndHole(Vector3 origin, Vector3 dir)
     {
-        const float maxRange = 200f;
+        if (!showTracer && !showBulletHoles) return;
+        float maxRange = Mathf.Max(0.01f, tracerMaxRange);
         var selfModel = GetComponentInParent<PlayerModel>();
 
         RaycastHit[] hits = Physics.RaycastAll(origin, dir, maxRange);
@@ -169,11 +179,12 @@ public class PlayerWeapon : MonoBehaviour
 
             end = hit.point;
             // 弹孔只贴"环境表面"：角色（PlayerModel）与敌人（EnemyBase）身上不贴
-            if (model == null && hit.collider.GetComponentInParent<EnemyBase>() == null)
+            if (showBulletHoles && model == null && hit.collider.GetComponentInParent<EnemyBase>() == null)
                 SpawnBulletHole(hit.point, hit.normal);
             break;
         }
-        SpawnTracer(origin, end);
+        if (showTracer)
+            SpawnTracer(origin, end);
     }
 
     /// <summary>画一条短命曳光线（枪口 → 终点）。</summary>
@@ -184,12 +195,12 @@ public class PlayerWeapon : MonoBehaviour
         lr.positionCount = 2;
         lr.SetPosition(0, start);
         lr.SetPosition(1, end);
-        lr.startWidth = 0.03f;
-        lr.endWidth = 0.004f;
+        lr.startWidth = tracerStartWidth;
+        lr.endWidth = tracerEndWidth;
         lr.material = GetTracerMaterial();
-        lr.startColor = new Color(1f, 0.95f, 0.55f, 0.9f);
-        lr.endColor = new Color(1f, 0.5f, 0.15f, 0.2f);
-        Destroy(go, 0.06f);
+        lr.startColor = tracerStartColor;
+        lr.endColor = tracerEndColor;
+        Destroy(go, tracerLifetime);
     }
 
     /// <summary>在表面贴一张程序化生成的弹孔贴花（小四边形，几秒后销毁）。</summary>
@@ -199,17 +210,19 @@ public class PlayerWeapon : MonoBehaviour
         Collider c = go.GetComponent<Collider>();
         if (c != null) Destroy(c);
         go.name = "BulletHole";
-        float size = 0.13f;
+        float size = bulletHoleSize;
         go.transform.localScale = new Vector3(size, size, 1f);
-        go.transform.position = point + normal * 0.002f;   // 略离表面防 Z-fight
+        go.transform.position = point + normal * bulletHoleSurfaceOffset;   // 略离表面防 Z-fight
         go.transform.rotation = Quaternion.LookRotation(-normal); // Quad 可视面为 -Z，让 -Z 朝外
-        go.transform.Rotate(0f, 0f, UnityEngine.Random.Range(0f, 360f), Space.Self); // 随机角度避免千篇一律
+        if (randomizeBulletHoleRotation)
+            go.transform.Rotate(0f, 0f, UnityEngine.Random.Range(0f, 360f), Space.Self); // 随机角度避免千篇一律
         go.GetComponent<MeshRenderer>().material = GetHoleMaterial();
-        Destroy(go, 4f);
+        Destroy(go, bulletHoleLifetime);
     }
 
-    private static Material GetTracerMaterial()
+    private Material GetTracerMaterial()
     {
+        if (tracerMaterial != null) return tracerMaterial;
         if (_tracerMat == null)
         {
             var shader = Shader.Find("Sprites/Default"); // URP 兼容的简单透明
@@ -219,8 +232,9 @@ public class PlayerWeapon : MonoBehaviour
         return _tracerMat;
     }
 
-    private static Material GetHoleMaterial()
+    private Material GetHoleMaterial()
     {
+        if (bulletHoleMaterial != null) return bulletHoleMaterial;
         if (_holeMat == null)
         {
             var shader = Shader.Find("Sprites/Default");

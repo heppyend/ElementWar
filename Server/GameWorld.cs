@@ -1,5 +1,6 @@
 using ElementWar.Combat;
 using ElementWar.Rules;
+using ElementWar.Net;
 
 namespace ElementWar.Server;
 
@@ -10,6 +11,7 @@ namespace ElementWar.Server;
 
 public sealed class GameWorldSettings
 {
+    public const float WalkableStepHeight = 0.65f;
     public string RulesetId = string.Empty;
     public string RulesContentHash = string.Empty;
     public int ServerTickRate = 60;    // 08-21：30→60Hz（命中反馈/远端平滑 2x；命中/计分/滑铲均按 tick 数算，随 tick 率缩放）
@@ -47,6 +49,8 @@ public sealed class GameWorldSettings
     public int WinScore = 5;
     public float ArenaHalfExtent = 40f;        // 简单边界钳制（XZ），防跑出竞技场
     public float CollisionRadius = 0.4f;       // PVP 角色水平圆形碰撞半径
+    /// <summary>由 Program 从 Unity 手动烘焙的 Profile 注入；空值时使用旧地图回退。</summary>
+    public PvpArenaCollisionProfile? CollisionProfile;
     // ---- 训练 bot ----
     public bool EnableBots = false;            // 默认关闭（单人纯测试）；`--bots` 开训练模式补位
     public string BotName = "训练Bot";
@@ -143,6 +147,7 @@ public sealed class ServerPlayer
     public bool RecentlyHit;                    // 受击反馈（客户端闪红）
     public bool IsBot;                          // 训练 bot：服务器自驱 AI，无网络端点
     public float SpawnSide = -1f;               // 出生/重生边（±1；不用 id 取模，bot 负数 id 时 C# 取模为负会翻边）
+    public int SpawnSlot = -1;                  // 四个权威出生点中的当前槽位
     // bot AI 状态
     public int BotTargetId;
     public int BotNextDecisionTick;             // 下次决策（换侧移方向 / 瞄准误差）
@@ -152,18 +157,30 @@ public sealed class ServerPlayer
 
 // ---- 可靠事件（逻辑层，wire eventId 由 UdpGameServer 分配）----
 public sealed record DeathEvent(int PlayerId, int LifeStateVersion, int KillerPlayerId, float RespawnRemainingSeconds);
-public sealed record RespawnEvent(int PlayerId, int LifeStateVersion, Vec3 Position, int Health, int MaxHealth);
+public sealed record RespawnEvent(int PlayerId, int LifeStateVersion, Vec3 Position, float BodyYawDeg, int Health, int MaxHealth);
 public sealed record KillEvent(int KillerPlayerId, int VictimPlayerId, int KillerScore, int VictimScore);
 public sealed record MatchEndEvent(int WinnerPlayerId, int[] FinalScores);
 
 public sealed class GameWorld
 {
+    private readonly record struct SpawnLocation(float X, float Z, float BodyYawDeg);
+
+    // 四个默认掩体（(0, ±12)、(±12, 0)）的外侧安全出生点；朝向均指向场地中心。
+    // 距掩体中心 1.5m，覆盖半尺寸 0.5m + 碰撞半径 0.4m 后仍留有安全余量。
+    private static readonly SpawnLocation[] SpawnLocations =
+    {
+        new(0f, 13.5f, 180f),
+        new(13.5f, 0f, -90f),
+        new(0f, -13.5f, 0f),
+        new(-13.5f, 0f, 90f),
+    };
+
     public readonly GameWorldSettings Settings;
     public int ServerTick;
     public bool MatchEnded;
     public readonly List<object> PendingReliableEvents = new(); // Death/Respawn/Kill/MatchEnd 逻辑事件（每 tick 清空）
     public readonly List<(int shooter, int target, Vec3 hit, int damage)> PendingHits = new(); // 命中广播（每 tick 清空）
-    public readonly List<(int shooter, int target, Vec3 origin, Vec3 end)> PendingShots = new(); // 所有权威开火（命中或未命中）
+    public readonly List<(int shooter, int target, Vec3 origin, Vec3 end, Vec3 normal, string surfaceId)> PendingShots = new(); // 所有权威开火（命中或未命中）
 
     private readonly Dictionary<int, ServerPlayer> _players = new();
     private int _nextPlayerId = 1;      // 人类 id：始终 1、2、3…（bot 用独立负数 id，不占人类序号）
@@ -177,7 +194,7 @@ public sealed class GameWorld
     public GameWorld(GameWorldSettings settings)
     {
         Settings = settings;
-        _collision = new ArenaCollisionWorld(settings.CollisionRadius, settings.ArenaHalfExtent);
+        _collision = new ArenaCollisionWorld(settings.CollisionRadius, settings.ArenaHalfExtent, profile: settings.CollisionProfile);
     }
 
     public IReadOnlyDictionary<int, ServerPlayer> Players => _players;
@@ -206,14 +223,9 @@ public sealed class GameWorld
             LastProcessedInputTick = ServerTick,
             Weapon = new WeaponRuntime(new WeaponDefinition(Settings.WeaponMagazineCapacity, Settings.FireDamage, Settings.FireCooldownSeconds, Settings.ReloadDurationSeconds), Settings.WeaponMagazineCapacity, Settings.WeaponReserveAmmo),
         };
-        // 出生点：玩家按 id 交替分到对称位置；Y 用该角色脚底偏移
+        // 出生点由服务器在四个掩体外侧安全点中随机选择；Y 用该角色脚底偏移。
         p.GroundY = GetGroundY(characterId);
-        // 与 PVPGame 的 spawnPoints 数组一致：玩家1在 +Z，玩家2在 -Z。
-        p.SpawnSide = (id % 2 == 0) ? -1f : 1f;
-        float side = p.SpawnSide;
-        p.Position = new Vec3(side * 0f, p.GroundY, side * 6f);
-        p.BodyYawDeg = (side < 0f) ? 0f : 180f;
-        p.AimPoint = p.Position;
+        AssignRandomSpawn(p);
         p.History.Add(new HistoryFrame { ServerTick = ServerTick, Position = p.Position, IsAlive = true });
         _players.Add(id, p);
         EnsureCombatantCount(); // 训练模式自动补位：1 人补 bot，2 人移除 bot
@@ -295,14 +307,13 @@ public sealed class GameWorld
             IsBot = true,
             Health = Settings.MaxHealth,
             MaxHealth = Settings.MaxHealth,
+            // Bot 也会走换弹、开火和快照链路；必须与真人在出生时同步建立权威武器运行时。
+            Weapon = new WeaponRuntime(new WeaponDefinition(Settings.WeaponMagazineCapacity, Settings.FireDamage,
+                Settings.FireCooldownSeconds, Settings.ReloadDurationSeconds), Settings.WeaponMagazineCapacity,
+                Settings.WeaponReserveAmmo),
         };
         b.GroundY = GetGroundY(botCharId);
-        // 出生在人类对面（人类 -Z 则 bot +Z），与人类初始对位
-        b.SpawnSide = (human != null && human.Position.Z < 0f) ? 1f : -1f;
-        float side = b.SpawnSide;
-        b.Position = new Vec3(side * 0f, b.GroundY, side * 6f);
-        b.BodyYawDeg = (side < 0f) ? 0f : 180f;
-        b.AimPoint = b.Position;
+        AssignRandomSpawn(b);
         b.History.Add(new HistoryFrame { ServerTick = ServerTick, Position = b.Position, IsAlive = true });
         _players.Add(id, b);
         Log?.Invoke($"[Bot] 训练 bot 加入: id={id} char={botCharId} 对位人类 char={humanCharId}");
@@ -527,19 +538,27 @@ public sealed class GameWorld
             newPos = new Vec3(newPos.X, p.Position.Y + p.VerticalSpeed * dt, newPos.Z);
         }
 
-        // 地面钳制（简化地面；Y 是该角色脚底偏移，脚才贴地）
-        if (newPos.Y <= p.GroundY)
+        // 竞技场边界钳制（XZ）
+        newPos = _collision.ResolveMovement(p.Position, newPos, p.GroundY);
+
+        // 共享 Profile 的可走三角面决定脚底高度。上跳阶段不吸回坡面；下落或地面移动才贴地。
+        float feetY = newPos.Y - p.GroundY;
+        if (p.VerticalSpeed <= 0f && _collision.TryGetWalkableHeight(newPos.X, newPos.Z, feetY,
+                GameWorldSettings.WalkableStepHeight, out float walkableY))
+        {
+            newPos = new Vec3(newPos.X, walkableY + p.GroundY, newPos.Z);
+            p.VerticalSpeed = 0f;
+            p.IsGrounded = true;
+        }
+        else if (newPos.Y <= p.GroundY)
         {
             newPos = new Vec3(newPos.X, p.GroundY, newPos.Z);
             p.VerticalSpeed = 0f;
             p.IsGrounded = true;
         }
-
-        // 竞技场边界钳制（XZ）
-        newPos = _collision.ResolveMovement(p.Position, newPos, p.GroundY);
+        else p.IsGrounded = false;
 
         p.Position = newPos;
-        p.IsGrounded = newPos.Y <= p.GroundY + 0.001f;
 
         // 动画状态（供远端 Avatar 驱动 Animator）
         if (!p.IsGrounded)
@@ -573,7 +592,10 @@ public sealed class GameWorld
         if (p.SlideSprintBoost) speed += Settings.SprintSlideBoost * t;
 
         Vec3 delta = p.SlideDirection * (speed * dt);
-        Vec3 newPos = _collision.ResolveMovement(p.Position, new Vec3(p.Position.X + delta.X, p.GroundY, p.Position.Z + delta.Z), p.GroundY);
+        Vec3 newPos = _collision.ResolveMovement(p.Position, new Vec3(p.Position.X + delta.X, p.Position.Y, p.Position.Z + delta.Z), p.GroundY);
+        if (_collision.TryGetWalkableHeight(newPos.X, newPos.Z, newPos.Y - p.GroundY,
+                GameWorldSettings.WalkableStepHeight, out float walkableY))
+            newPos = new Vec3(newPos.X, walkableY + p.GroundY, newPos.Z);
 
         p.Position = newPos;
         p.VerticalSpeed = 0f;
@@ -746,9 +768,16 @@ public sealed class GameWorld
         // 找最近命中
         int? bestTarget = null;
         float bestDist = Settings.FireRange;
-        if (_collision.RaycastWalls(origin, aimDir, Settings.FireRange, out float wallDist))
-            bestDist = wallDist;
-        Vec3 bestHit = origin;
+        Vec3 bestHit = origin + aimDir * Settings.FireRange;
+        Vec3 staticNormal = Vec3.Zero;
+        string staticSurfaceId = "";
+        if (_collision.RaycastStaticGeometry(origin, aimDir, Settings.FireRange, out ArenaCollisionWorld.BulletHit wallHit))
+        {
+            bestDist = wallHit.Distance;
+            bestHit = wallHit.Point;
+            staticNormal = wallHit.Normal;
+            staticSurfaceId = wallHit.SurfaceId;
+        }
 
         foreach (var other in _players.Values)
         {
@@ -767,8 +796,10 @@ public sealed class GameWorld
             }
         }
 
-        Vec3 shotEnd = bestTarget is null ? origin + aimDir * Settings.FireRange : bestHit;
-        PendingShots.Add((p.PlayerId, bestTarget ?? 0, origin, shotEnd));
+        // bestHit 已同时覆盖：未命中射程终点、静态墙体命中点、角色命中点。
+        PendingShots.Add((p.PlayerId, bestTarget ?? 0, origin, bestHit,
+            bestTarget is null ? staticNormal : Vec3.Zero,
+            bestTarget is null ? staticSurfaceId : ""));
         if (bestTarget is not null)
             ApplyDamage(p, GetPlayer(bestTarget.Value)!, bestHit, damage);
     }
@@ -892,10 +923,7 @@ public sealed class GameWorld
 
     private void Respawn(ServerPlayer p)
     {
-        float side = p.SpawnSide;
-        p.Position = new Vec3(0f, p.GroundY, side * 6f);
-        p.BodyYawDeg = (side < 0f) ? 0f : 180f;
-        p.AimPoint = p.Position;
+        AssignRandomSpawn(p);
         p.VerticalSpeed = 0f;
         p.IsGrounded = true;
         p.Health = Settings.MaxHealth;
@@ -910,7 +938,26 @@ public sealed class GameWorld
         p.LastInput = null;
         p.NoInputTicks = 0;
         p.Weapon = new WeaponRuntime(new WeaponDefinition(Settings.WeaponMagazineCapacity, Settings.FireDamage, Settings.FireCooldownSeconds, Settings.ReloadDurationSeconds), Settings.WeaponMagazineCapacity, Settings.WeaponReserveAmmo);
-        PendingReliableEvents.Add(new RespawnEvent(p.PlayerId, p.LifeStateVersion, p.Position, p.Health, p.MaxHealth));
+        PendingReliableEvents.Add(new RespawnEvent(p.PlayerId, p.LifeStateVersion, p.Position, p.BodyYawDeg, p.Health, p.MaxHealth));
+    }
+
+    private void AssignRandomSpawn(ServerPlayer player)
+    {
+        var available = new List<int>(SpawnLocations.Length);
+        for (int i = 0; i < SpawnLocations.Length; i++)
+        {
+            bool occupied = _players.Values.Any(other => other != player && other.IsAlive && other.SpawnSlot == i);
+            if (!occupied) available.Add(i);
+        }
+
+        int slot = available.Count > 0
+            ? available[Random.Shared.Next(available.Count)]
+            : Random.Shared.Next(SpawnLocations.Length);
+        SpawnLocation spawn = SpawnLocations[slot];
+        player.SpawnSlot = slot;
+        player.Position = new Vec3(spawn.X, player.GroundY, spawn.Z);
+        player.BodyYawDeg = spawn.BodyYawDeg;
+        player.AimPoint = player.Position;
     }
 
     private static bool IsFinite(float v) => float.IsFinite(v);

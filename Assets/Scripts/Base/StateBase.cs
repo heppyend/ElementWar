@@ -5,9 +5,6 @@ using UnityEngine;
 /// <summary>
 /// 角色状态基类
 /// </summary>
-
-
-
 public abstract class StateBase //抽象类，抽象方法
 {
 
@@ -34,8 +31,5 @@ public abstract class StateBase //抽象类，抽象方法
     public abstract void Destory();
 
     public abstract void Update();
-
-
-
 
 }

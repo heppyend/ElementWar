@@ -48,6 +48,7 @@ namespace ElementWar.Net
         private float _yAxis = 0.5f;
         private float _aimPitch;              // 瞄准期间相对右肩基线的俯仰偏移（进入瞄准归零）
         private bool _aiming;
+        private bool _gameplayInputEnabled = true;
         private CinemachineImpulseSource _impulse;   // 开火/受击相机震动（PVE 同款：挂瞄准相机）
 
         /// <summary>右肩镜头轨道：FreeLook YAxis 0.5 = 中段轨道（aimHeight 高度），即右肩视点。
@@ -114,6 +115,12 @@ namespace ElementWar.Net
             if (_impulse != null) _impulse.GenerateImpulse();
         }
 
+        /// <summary>本地 PVP 菜单打开时关闭鼠标视角读取；相机仍可跟随服务器校正后的本机位置。</summary>
+        public void SetGameplayInputEnabled(bool value)
+        {
+            _gameplayInputEnabled = value;
+        }
+
         private void Update()
         {
             var net = FindObjectOfType<NetClient>();
@@ -137,6 +144,7 @@ namespace ElementWar.Net
                 _aim.LookAt = _aimLook;
             }
             if (_target == null) return;
+            if (!_gameplayInputEnabled) return;
 
             // 先确定当前模式，再写入轨道轴，避免退出瞄准时多保留一帧瞄准相机状态。
             bool aiming = net != null && net.LocalMotor != null && (net.LocalMotor.isAiming || net.LocalMotor.isFire);

@@ -6,8 +6,6 @@ using UnityEngine;
 /// </summary>
 public class PlayerStateBase : StateBase
 {
-
-
     protected PlayerController playerController;
     protected PlayerModel playerModel;//当前状态的角色模型
 
@@ -72,8 +70,6 @@ public class PlayerStateBase : StateBase
             playerModel.SwitchState(PlayerState.Aiming);
         }
         #endregion
-
-
     }
 
     /// <summary>

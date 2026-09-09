@@ -26,6 +26,7 @@ namespace ElementWar.Net
         public const float SprintSlideBoost = 2f;
         public const float ArenaHalfExtent = 40f;
         public const float CollisionRadius = 0.4f;
+        public const float WalkableStepHeight = 0.65f;
 
         [Tooltip("当前表现输入（由 NetClient 每帧写入）")]
         public Vector2 moveInput;
@@ -245,18 +246,24 @@ namespace ElementWar.Net
                 newPos.y = transform.position.y + _verticalSpeed * dt;
             }
 
-            if (newPos.y <= _groundY)
+            newPos = PvpCollisionWorld.ResolveMovement(transform.position, newPos, _collisionRadius, _arenaHalfExtent, _groundY);
+            newPos = PvpCollisionWorld.ResolveAgainstPlayers(newPos, _dynamicCollisionPositions, _collisionRadius, _arenaHalfExtent, _groundY);
+            if (_verticalSpeed <= 0f && PvpCollisionWorld.TryGetWalkableHeight(newPos.x, newPos.z,
+                    newPos.y - _groundY, WalkableStepHeight, out float walkableY))
+            {
+                newPos.y = walkableY + _groundY;
+                _verticalSpeed = 0f;
+                _isGrounded = true;
+            }
+            else if (newPos.y <= _groundY)
             {
                 newPos.y = _groundY;
                 _verticalSpeed = 0f;
                 _isGrounded = true;
             }
-
-            newPos = PvpCollisionWorld.ResolveMovement(transform.position, newPos, _collisionRadius, _arenaHalfExtent, _groundY);
-            newPos = PvpCollisionWorld.ResolveAgainstPlayers(newPos, _dynamicCollisionPositions, _collisionRadius, _arenaHalfExtent, _groundY);
+            else _isGrounded = false;
             transform.position = newPos;
             transform.rotation = Quaternion.Euler(0f, bodyYawDeg, 0f);
-            _isGrounded = newPos.y <= _groundY + 0.001f;
         }
 
         private void StepSlide(float dt, int serverTickRate)
@@ -267,9 +274,12 @@ namespace ElementWar.Net
             if (_slideSprintBoost) speed += _sprintSlideBoost * t;
 
             Vector3 newPos = transform.position + _slideDirection * (speed * dt);
-            newPos.y = _groundY;
+            newPos.y = transform.position.y;
             newPos = PvpCollisionWorld.ResolveMovement(transform.position, newPos, _collisionRadius, _arenaHalfExtent, _groundY);
             newPos = PvpCollisionWorld.ResolveAgainstPlayers(newPos, _dynamicCollisionPositions, _collisionRadius, _arenaHalfExtent, _groundY);
+            if (PvpCollisionWorld.TryGetWalkableHeight(newPos.x, newPos.z, newPos.y - _groundY,
+                    WalkableStepHeight, out float walkableY))
+                newPos.y = walkableY + _groundY;
             transform.position = newPos;
             _verticalSpeed = 0f;
             _isGrounded = true;

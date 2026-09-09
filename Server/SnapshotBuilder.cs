@@ -43,6 +43,7 @@ public static class SnapshotBuilder
                 MagazineAmmo = p.Weapon.MagazineAmmo,
                 ReserveAmmo = p.Weapon.ReserveAmmo,
                 IsReloading = p.Weapon.IsReloading,
+                ReloadCompletesAtSeconds = p.Weapon.ReloadCompletesAtSeconds,
             });
         }
         return list.ToArray();

@@ -175,6 +175,8 @@ public sealed class UdpGameServer : IDisposable
     private void SendWelcome(ClientConnection conn, string key)
     {
         conn.WelcomeSent = true;
+        ServerPlayer? player = _world.GetPlayer(conn.PlayerId);
+        if (player == null) return;
         var welcome = new ServerWelcomeMessage
         {
             Type = "welcome",
@@ -186,6 +188,10 @@ public sealed class UdpGameServer : IDisposable
             RulesSchemaVersion = GameRulesValidator.SupportedSchemaVersion,
             RulesetId = _options.WorldSettings.RulesetId,
             RulesContentHash = _options.WorldSettings.RulesContentHash,
+            SpawnX = player.Position.X,
+            SpawnY = player.Position.Y,
+            SpawnZ = player.Position.Z,
+            SpawnBodyYawDeg = player.BodyYawDeg,
         };
         Send(conn.Endpoint, Serialize(welcome));
     }
@@ -391,6 +397,7 @@ public sealed class UdpGameServer : IDisposable
                 Type = "respawn", EventId = eventId, ServerTick = _world.ServerTick,
                 PlayerId = r.PlayerId, LifeStateVersion = r.LifeStateVersion,
                 X = r.Position.X, Y = r.Position.Y, Z = r.Position.Z,
+                BodyYawDeg = r.BodyYawDeg,
                 Health = r.Health, MaxHealth = r.MaxHealth,
             },
             KillEvent k => new KillEventMessage
@@ -437,6 +444,10 @@ public sealed class UdpGameServer : IDisposable
                     EndX = shot.end.X,
                     EndY = shot.end.Y,
                     EndZ = shot.end.Z,
+                    SurfaceNormalX = shot.normal.X,
+                    SurfaceNormalY = shot.normal.Y,
+                    SurfaceNormalZ = shot.normal.Z,
+                    SurfaceId = shot.surfaceId,
                 };
                 _pendingSends.Add((conn.Endpoint, Serialize(msg)));
             }

@@ -37,7 +37,21 @@ public class PlayerController : SingleMonoBase<PlayerController>
     public bool isSlide;//滑铲输入
     [HideInInspector]
     public bool isReload;//换弹输入（一次性）
+    [Header("PVE 输入调试")]
+    [Tooltip("PVE 换弹按键。该字段只影响当前 PlayerController 的本地 PVE 输入。")]
+    [SerializeField] private Key reloadKey = Key.R;
     #endregion
+
+    [Header("PVE UI")]
+    [Tooltip("在 PVEHUD 上配置的 GAME OVER 视图。未配置时保留旧的动态 GAME OVER 兼容方案。")]
+    [SerializeField] private PveGameOverView gameOverView;
+    private bool gameplayInputLocked;
+    private bool pauseInputLocked;
+
+    /// <summary>菜单暂停期间为 true；供状态层跳过瞄准射线等游戏内交互。</summary>
+    public bool IsGameplayPaused => pauseInputLocked;
+    /// <summary>全灭 GAME OVER 后为 true；该锁不可通过暂停菜单解除。</summary>
+    public bool IsGameOverInputLocked => gameplayInputLocked;
 
     #region 瞄准相关
 
@@ -97,6 +111,12 @@ public class PlayerController : SingleMonoBase<PlayerController>
     
     void Update()
     {
+        if (gameplayInputLocked || pauseInputLocked)
+        {
+            ClearGameplayInput();
+            return;
+        }
+
         #region 更新玩家输入
         moveInput = input.Player.Move.ReadValue<Vector2>().normalized;
         isSprint = input.Player.IsSprint.IsPressed();
@@ -104,7 +124,8 @@ public class PlayerController : SingleMonoBase<PlayerController>
         isJumping = input.Player.IsJumping.triggered;
         isFire=input.Player.Fire.IsPressed();
         isSlide = input.Player.IsSlide.triggered;//单击触发一次滑铲（避免长按循环触发）
-        isReload = Keyboard.current != null && Keyboard.current.rKey.wasPressedThisFrame;
+        isReload = Keyboard.current != null && reloadKey != Key.None
+                   && Keyboard.current[reloadKey].wasPressedThisFrame;
         #endregion
 
         #region 计算玩家移动方向
@@ -193,9 +214,62 @@ public class PlayerController : SingleMonoBase<PlayerController>
         {
             // 全部死亡 → GAME OVER
             Debug.LogWarning("所有角色死亡，游戏结束。");
-            if (GetComponent<GameOverUI>() == null)
+            LockGameplayInput();
+            if (gameOverView != null)
+                gameOverView.Show();
+            else if (GetComponent<GameOverUI>() == null)
                 gameObject.AddComponent<GameOverUI>();
         }
+    }
+
+    /// <summary>
+    /// 全灭后停止本地角色操作并冻结当前镜头画面。
+    /// Game Over UI 直接读取键盘/鼠标来返回主菜单，因此不禁用整个 Input System。
+    /// </summary>
+    private void LockGameplayInput()
+    {
+        if (gameplayInputLocked) return;
+
+        gameplayInputLocked = true;
+        ClearGameplayInput();
+
+        SetGameplayCameraEnabled(false);
+    }
+
+    /// <summary>
+    /// 供 PVE 暂停菜单调用的可恢复输入锁。
+    /// 暂停时清空所有玩法输入并停用两台虚拟相机，避免鼠标继续驱动镜头或瞄准射线；
+    /// GAME OVER 已锁定时不允许菜单重新开启相机。
+    /// </summary>
+    public void SetPauseInputLocked(bool value)
+    {
+        if (gameplayInputLocked) return;
+        if (pauseInputLocked == value) return;
+
+        pauseInputLocked = value;
+        ClearGameplayInput();
+        SetGameplayCameraEnabled(!value);
+    }
+
+    private void SetGameplayCameraEnabled(bool value)
+    {
+        if (freeLookCamera != null)
+            freeLookCamera.enabled = value;
+        if (aimingCamera != null)
+            aimingCamera.enabled = value;
+    }
+
+    private void ClearGameplayInput()
+    {
+        moveInput = Vector2.zero;
+        worldMovement = Vector3.zero;
+        localMovement = Vector3.zero;
+        isSprint = false;
+        isAiming = false;
+        isJumping = false;
+        isFire = false;
+        isSlide = false;
+        isReload = false;
     }
 
     /// <summary>

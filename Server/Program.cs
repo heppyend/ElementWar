@@ -33,6 +33,17 @@ options.WorldSettings.ApplyRules(rules.pvp_1v1);
 options.WorldSettings.RulesetId = rules.rulesetId;
 options.WorldSettings.RulesContentHash = rulesHash;
 
+string? collisionProfilePath = ParseStringArg("--collision-profile");
+if (PvpCollisionProfileFileLoader.TryLoad(collisionProfilePath, out var collisionProfile, out string collisionProfileResult))
+{
+    options.WorldSettings.CollisionProfile = collisionProfile;
+    Console.WriteLine($"[CollisionProfile] loaded {collisionProfileResult} hash={collisionProfile!.contentHash}");
+}
+else
+{
+    Console.WriteLine($"[CollisionProfile] {collisionProfileResult}; using legacy arena fallback.");
+}
+
 using var shutdown = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) =>
 {
@@ -66,4 +77,12 @@ static bool ParseFlag(string key)
 {
     string[] args = Environment.GetCommandLineArgs();
     return Array.IndexOf(args, key) >= 0;
+}
+
+static string? ParseStringArg(string key)
+{
+    string[] args = Environment.GetCommandLineArgs();
+    for (int i = 0; i < args.Length - 1; i++)
+        if (string.Equals(args[i], key, StringComparison.OrdinalIgnoreCase)) return args[i + 1];
+    return null;
 }

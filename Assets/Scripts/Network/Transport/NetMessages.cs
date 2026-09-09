@@ -53,6 +53,8 @@ namespace ElementWar.Net
         public int rulesSchemaVersion;
         public string rulesetId = "";
         public string rulesContentHash = "";
+        public float spawnX, spawnY, spawnZ;
+        public float spawnBodyYawDeg;
     }
 
     [Serializable] public class RulesRejectedMessage
@@ -148,6 +150,7 @@ namespace ElementWar.Net
         public int magazineAmmo;
         public int reserveAmmo;
         public bool isReloading;
+        public float reloadCompletesAtSeconds;
     }
 
     [Serializable] public class ShotEventMessage
@@ -158,6 +161,8 @@ namespace ElementWar.Net
         public int targetPlayerId;
         public float originX, originY, originZ;
         public float endX, endY, endZ;
+        public float surfaceNormalX, surfaceNormalY, surfaceNormalZ;
+        public string surfaceId;
     }
 
     [Serializable] public class WorldSnapshotMessage
@@ -201,6 +206,7 @@ namespace ElementWar.Net
         public int victimPlayerId;
         public float respawnRemainingSeconds;
         public float x, y, z;
+        public float bodyYawDeg;
         public int health, maxHealth;
         public int killerScore, victimScore;
         public int winnerPlayerId;

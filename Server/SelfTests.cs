@@ -1,4 +1,5 @@
 using ElementWar.Rules;
+using ElementWar.Net;
 
 namespace ElementWar.Server;
 
@@ -14,10 +15,13 @@ public static class SelfTests
         ReliableLedgerHonorsResendInterval();
         CollisionStopsAtCover();
         PlayersAreSeparatedAndWallsBlockShots();
+        CenterCoverUsesConcaveOutline();
+        BakedProfileBlocksMovementAndReturnsSurfaceHit();
+        TrainingBotInitializesCombatState();
         JumpSurvivesCollisionResolution();
         AuthoritativeAmmoReloadsFromIntent();
         RulesValidatorRejectsInvalidProfiles();
-        Console.WriteLine("[SelfTest] 12/12 passed");
+        Console.WriteLine("[SelfTest] 15/15 passed");
     }
 
     private static void AuthoritativeAmmoReloadsFromIntent()
@@ -57,8 +61,9 @@ public static class SelfTests
         var world = new GameWorld(new GameWorldSettings());
         var p1 = world.AddPlayer("P1", 0);
         var p2 = world.AddPlayer("P2", 1);
-        AssertNear(p1.Position.Z, 6f, "P1 spawn Z");
-        AssertNear(p2.Position.Z, -6f, "P2 spawn Z");
+        Assert(IsOuterCoverSpawn(p1.Position), $"P1 must use an outer-cover spawn: {p1.Position}");
+        Assert(IsOuterCoverSpawn(p2.Position), $"P2 must use an outer-cover spawn: {p2.Position}");
+        Assert(p1.SpawnSlot != p2.SpawnSlot, "two living players must not share an initial spawn slot");
         AssertNear(p1.Position.Y, 0.025f, "Lumine ground Y");
         AssertNear(p2.Position.Y, 0.15f, "Furina ground Y");
     }
@@ -68,6 +73,10 @@ public static class SelfTests
         var settings = new GameWorldSettings();
         var world = new GameWorld(settings);
         var player = world.AddPlayer("P1", 0);
+        // 出生点现在随机在掩体外侧；移动语义测试必须脱离静态障碍，避免把碰撞结果误判成输入方向错误。
+        player.Position = new Vec3(20f, player.GroundY, 20f);
+        float initialX = player.Position.X;
+        float initialZ = player.Position.Z;
         bool accepted = world.TryQueueInput(player.PlayerId, new PlayerInputMessage
         {
             InputTick = 1,
@@ -78,8 +87,8 @@ public static class SelfTests
         });
         Assert(accepted, "input should be accepted");
         world.StepFrame(1f / settings.ServerTickRate);
-        Assert(player.Position.X > 0.03f, "firing movement should strafe along input");
-        AssertNear(player.Position.Z, 6f, "firing movement must not walk backward by body yaw");
+        Assert(player.Position.X > initialX + 0.03f, "firing movement should strafe along input");
+        AssertNear(player.Position.Z, initialZ, "firing movement must not walk backward by body yaw");
     }
 
     private static void EveryAcceptedFireCreatesShotEvent()
@@ -151,7 +160,77 @@ public static class SelfTests
         collision.ResolvePlayerPush(new List<ServerPlayer> { a, b });
         Assert(Vec3.Distance(a.Position, b.Position) >= 0.799f, "players must not overlap after push");
         Assert(collision.RaycastWalls(new Vec3(0f, 1.5f, 0f), new Vec3(0f, 0f, 1f), 35f, out float wall)
-            && wall > 11f && wall < 12f, "wall raycast should hit Cover_0");
+            && wall > 7.3f && wall < 7.4f, "wall raycast should hit the center cover before Cover_0");
+    }
+
+    private static void CenterCoverUsesConcaveOutline()
+    {
+        var collision = new ArenaCollisionWorld(0.4f, 40f);
+        // 十字右上凹角属于实体外部；若退化成 AABB，这个点会被错误弹出。
+        var gap = collision.ResolveMovement(new Vec3(5f, 0.025f, 4f), new Vec3(5f, 0.025f, 4f), 0.025f);
+        AssertNear(gap.X, 5f, "concave gap x");
+        AssertNear(gap.Z, 4f, "concave gap z");
+
+        // 从右臂北侧推进，角色中心必须停在真实边缘 z=2.624 的半径之外。
+        var blocked = collision.ResolveMovement(new Vec3(5f, 0.025f, 4f), new Vec3(5f, 0.025f, 0f), 0.025f);
+        Assert(blocked.Z >= 3.023f && blocked.Z <= 3.025f, $"center cover collision failed: {blocked}");
+    }
+
+    private static void BakedProfileBlocksMovementAndReturnsSurfaceHit()
+    {
+        var profile = new PvpArenaCollisionProfile
+        {
+            contentHash = "self-test",
+            movementVolumes =
+            [new PvpMovementVolume
+            {
+                id = "test-wall", minY = 0f, maxY = 2f,
+                points = [new(-1f, 4f), new(1f, 4f), new(1f, 6f), new(-1f, 6f)]
+            }],
+            bulletTriangles =
+            [new PvpBulletTriangle
+            {
+                surfaceId = "Metal",
+                a = new PvpPoint3(-1f, 0f, 4f), b = new PvpPoint3(1f, 0f, 4f), c = new PvpPoint3(0f, 2f, 4f)
+            }],
+            walkableTriangles =
+            [new PvpWalkableTriangle
+            {
+                id = "test-ramp",
+                blocksBelow = true,
+                a = new PvpPoint3(-1f, 0f, 0f), b = new PvpPoint3(1f, 0f, 0f), c = new PvpPoint3(0f, 1f, 2f)
+            }],
+            sideWallTriangles =
+            [new PvpSideWallTriangle
+            {
+                id = "test-side", a = new PvpPoint3(-1f, 0f, 3f), b = new PvpPoint3(1f, 0f, 3f), c = new PvpPoint3(0f, 2f, 3f)
+            }]
+        };
+        var collision = new ArenaCollisionWorld(0.4f, 40f, profile: profile);
+        var end = collision.ResolveMovement(new Vec3(0f, 0.025f, 2f), new Vec3(0f, 0.025f, 5f), 0.025f);
+        Assert(end.Z <= 3.6001f, "baked movement proxy must block capsule movement");
+        Assert(collision.RaycastStaticGeometry(new Vec3(0f, 1f, 0f), new Vec3(0f, 0f, 1f), 10f, out var hit)
+            && hit.SurfaceId == "Metal" && hit.Normal.Z < -0.99f && hit.Distance > 3.9f && hit.Distance < 4.1f,
+            "baked triangle must return exact authoritative surface hit");
+        Assert(collision.TryGetWalkableHeight(0f, 1f, 0f, 0.65f, out float slopeY)
+            && slopeY > 0.49f && slopeY < 0.51f, "baked walkable triangle must provide ramp height");
+        Assert(collision.IsBlockedByWalkableSide(0f, 1.8f, 0f, 0.1f), "steep walkable surface must block side entry below its height");
+        Vec3 slide = collision.ResolveWalkableSideSlide(new Vec3(-1.2f, 0f, 1.8f), new Vec3(0.2f, 0f, 1.8f), 0f, 0.1f);
+        Assert(slide.X > -1.19f || MathF.Abs(slide.Z - 1.8f) > 0.001f, "side collision should preserve a tangential slide component");
+        Vec3 slopeEntry = collision.ResolveMovement(new Vec3(0f, 0.025f, 0.8f), new Vec3(0f, 0.025f, 1.8f), 0.025f);
+        Assert(slopeEntry.Z < 1.8f, "low-side entry into a high walkable surface must be blocked");
+        Vec3 slopeExit = collision.ResolveMovement(new Vec3(0f, 0.025f, 1.8f), new Vec3(0f, 0.025f, 2.5f), 0.025f);
+        Assert(slopeExit.Z > 1.8f, "leaving a walkable surface toward the low side must remain possible");
+    }
+
+    private static void TrainingBotInitializesCombatState()
+    {
+        var settings = new GameWorldSettings { EnableBots = true };
+        var world = new GameWorld(settings);
+        world.AddPlayer("P1", 0);
+        var bot = world.Players.Values.Single(p => p.IsBot);
+        Assert(bot.Weapon != null, "training bot must receive a WeaponRuntime on spawn");
+        world.StepFrame(1f / settings.ServerTickRate);
     }
 
     private static void JumpSurvivesCollisionResolution()
@@ -168,6 +247,13 @@ public static class SelfTests
     {
         if (MathF.Abs(actual - expected) > 0.0001f)
             throw new InvalidOperationException($"{name}: expected {expected}, actual {actual}");
+    }
+
+    private static bool IsOuterCoverSpawn(Vec3 p)
+    {
+        const float tolerance = 0.001f;
+        return (Math.Abs(p.X) <= tolerance && Math.Abs(Math.Abs(p.Z) - 13.5f) <= tolerance)
+            || (Math.Abs(p.Z) <= tolerance && Math.Abs(Math.Abs(p.X) - 13.5f) <= tolerance);
     }
 
     private static void Assert(bool condition, string message)

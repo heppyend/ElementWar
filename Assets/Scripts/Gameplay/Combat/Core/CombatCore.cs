@@ -92,6 +92,8 @@ namespace ElementWar.Combat
         public int MagazineAmmo { get; private set; }
         public int ReserveAmmo { get; private set; }
         public bool IsReloading { get; private set; }
+        /// <summary>权威换弹结束时刻；未换弹时为 0。</summary>
+        public float ReloadCompletesAtSeconds => IsReloading ? reloadCompletesAt : 0f;
 
         public WeaponRuntime(WeaponDefinition definition, int initialMagazineAmmo, int initialReserveAmmo)
         {
