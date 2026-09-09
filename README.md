@@ -2,7 +2,14 @@
 
 > 审计日期：2026-09-03  
 > Unity：2022.3.62f3 / URP 14.0.12  
-> 本仓库仅包含运行项目所需的代码、配置与可分发资源；个人资料和内部过程记录不纳入版本库。代码与实际 Unity 运行结果高于历史文档。
+> 本仓库公开发布的是自有代码、服务器代码、配置和技术文档。第三方模型、动画、音频、贴图、Prefab、Unity Asset Store 包和其他不可确认再分发的资源已从公开版本移除。代码与实际 Unity 运行结果高于历史文档。
+
+## 公开分发边界
+
+- 本仓库没有对第三方资源授予 MIT 或其他开源许可。
+- BBB-Nexus、Fantasy、YokiFrame 等仅作为设计参考；本仓库不重新分发其源码或资源。
+- 角色模型、MMD/PMX、动画、音频、贴图、Prefab、Asset Store 包等需要由使用者自行取得，并遵守原作者或供应商许可证。
+- 本仓库暂不添加根目录 `LICENSE`，直到自有代码与第三方内容边界完成单独审计。
 
 ## 1. 项目定位
 
@@ -96,9 +103,9 @@ NetClient
 
 它们都已被 `.gitignore` 排除。本轮没有为了“看起来干净”而删除正在使用或会导致大规模重导入的缓存。需要释放空间时，应先关闭 Unity 和 IDE，再通过 Unity 重新生成工程文件。
 
-### 不应删除
+### 公开版本中的资源处理
 
-`Assets/Plugins/MMD4Mecanim/Shaders/*.shader.bak` 是第三方插件随包提交的历史文件，不是本轮产生的脏文件。第三方资源、许可证和示例在完成 GUID、Scene/Prefab 引用与授权检查前都不做删除。
+第三方模型、动画、音频、贴图、Prefab、Asset Store 包和示例不随公开仓库分发。需要这些内容的本地开发者必须自行取得合法授权，并按原许可证安装。
 
 ## 5. 主要问题与优先级
 
@@ -116,12 +123,12 @@ NetClient
 1. 建立唯一人工维护的 `GameRules.v1.json`：包含 `schemaVersion`、`rulesetId`、`pve`、`pvp_1v1`，以及 movement / weapon / life / spawn 四组规则；角色、武器、敌人只通过 ID 与显式覆盖项引用规则。
 2. 建立不依赖 `UnityEngine` 的共享 DTO、校验器与内容哈希。PVP 客户端和服务器必须使用相同 schema、校验与哈希；配置不匹配时在握手阶段拒绝进房。
 3. 第一轮只迁 PVP 的 `GameWorldSettings` 与 `PvPMotor` 数值来源，保持当前玩法数值不变；现有 PVE 三角色不批量迁移，后续只接入同一 schema 的 `pve` profile。
-4. BBBNexus 直接用于 `TextScene/Single Framework` 的一个新角色试点，验证输入、意图仲裁、动画与装备表现；它不接管 PVP 权威模拟，也不替换当前 PVEGame。
-5. BBB 源码在进入公开主仓库前必须固定上游 commit，并补齐可留档的标准许可证文本；其自动修改 PlayerSettings 宏的 Editor 功能不进入首轮试点。
+4. BBBNexus 的设计思想只用于隔离试点，验证输入、意图仲裁、动画与装备表现；它不接管 PVP 权威模拟，也不替换当前 PVEGame。
+5. 未取得明确许可证或再分发授权的 BBB 源码、插件和资源不进入公开仓库。
 
 ### PMX 新角色适配基线
 
-PMX/MMD 新角色的转换、动作和 BBB-Nexus 适配要求见 [`PMX_Unity_Adaptation_Baseline.md`](Assets/BBBWork/NewCharacterAssets/Documentation/PMX_Unity_Adaptation_Baseline.md)。当前推荐由独立 Blender 工作区完成 `PMX/VMD → FBX` 转换，再由 Unity `TextScene` 完成导入、Avatar、动画、Root Motion、IK 和 BBB 控制器验证。该实验与正式 PVE/PVP 保持隔离。
+PMX/MMD 新角色的转换、动作和 BBB-Nexus 适配要求在私有开发资料中维护。公开仓库不分发 PMX、VMD、模型、贴图或转换产物；合法授权后的实验应在独立 Blender 工作区和 Unity `TextScene` 中完成，并与正式 PVE/PVP 保持隔离。
 
 验收门槛：同一规则文件驱动 PVP 客户端与服务器；合法/非法/缺字段/版本不匹配/哈希不匹配有纯 C# 测试；现有跳跃、滑铲、弹药、换弹、伤害、死亡/重生自测不回归；Unity 双客户端能拒绝错误配置；BBB 沙盒只影响新角色试点，当前 PVEGame 不受影响。
 
@@ -165,7 +172,7 @@ PMX/MMD 新角色的转换、动作和 BBB-Nexus 适配要求见 [`PMX_Unity_Ada
 - Animation / IK / Audio Facade：让玩法逻辑不直接依赖具体表现后端；
 - 分模块 ScriptableObject 配置。
 
-不直接导入：本地源码 132 个 C# 文件但没有测试和独立许可证文件；核心强依赖 Animancer，部分源码直接引用 FinalIK；编辑器脚本会修改宏；它将 `applyRootMotion=false`，与 ElementWar 当前 Animation Rigging 契约冲突。README 的授权说明不能替代可留档许可证。
+不直接导入：本地源码没有可确认的独立许可证文件，且可能依赖 Animancer、FinalIK 等外部组件。当前只保留设计层面的参考，不重新分发其源码、插件或资源；README 的说明不能替代原作者许可证。
 
 ### Fantasy
 
@@ -176,7 +183,7 @@ PMX/MMD 新角色的转换、动作和 BBB-Nexus 适配要求见 [`PMX_Unity_Ada
 - 会话、路由、服务发现、跨服和可观测性的工程分层；
 - ECS 用于服务器大量实体，而不是替换 Unity 角色表现。
 
-不直接替换当前 PVP：Fantasy 是完整分布式服务器体系，迁移会同时改变协议、会话、实体模型和部署，无法判断同步问题究竟来自传输还是玩法模拟。本地 Unity 包版本为 `2026.1.2001`，依赖 Newtonsoft JSON。其许可证文本虽标题为 MIT，但额外排除了特定主体，法律上不能简单按标准 MIT 处理，正式使用前需单独确认。
+不直接替换当前 PVP：Fantasy 是完整分布式服务器体系，迁移会同时改变协议、会话、实体模型和部署，无法判断同步问题究竟来自传输还是玩法模拟。这里只借鉴架构思想，不把其源码、包或许可证转授给本项目。任何实际集成都必须先核对上游版本、完整许可证和再分发条件。
 
 未来触发条件：当前 1v1 UDP 通过稳定性验收后，若出现多房间、跨服、AOI、热更或协议维护成本，再建立并行 `FantasyPilot`，只替换连接/消息入口，复用同一权威玩法核心做 A/B 对照。
 
