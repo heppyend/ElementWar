@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": { "title": "ElementWar PVE 玩家状态机", "locale": "zh-CN", "quality_profile": "showcase", "viewBox": [1080, 620] },
+  "lanes": [{ "id": "main", "label": "地面主链路" }, { "id": "air", "label": "空中分支" }, { "id": "terminal", "label": "生命终止" }],
+  "states": [
+    { "id": "idle", "type": "start", "label": "Idle", "sublabel": "等待输入", "lane": "main", "col": 0, "step": "01", "tag": "初始" },
+    { "id": "move", "type": "active", "label": "Move", "sublabel": "相机相对移动", "lane": "main", "col": 1, "step": "02", "tag": "地面" },
+    { "id": "sprint", "type": "active", "label": "Sprint", "sublabel": "Shift 加速", "lane": "main", "col": 2, "step": "03", "tag": "地面" },
+    { "id": "aiming", "type": "active", "label": "Aiming", "sublabel": "瞄准相机与动画参数", "lane": "main", "col": 3, "step": "04", "tag": "瞄准覆盖" },
+    { "id": "hover", "type": "active", "label": "Hover", "sublabel": "跳跃或坠落；手动重力", "lane": "air", "col": 0, "tag": "空中", "yOffset": 10 },
+    { "id": "dead", "type": "failure", "label": "Dead", "sublabel": "HP 归零后的死亡流程", "lane": "terminal", "col": 0, "tag": "终止", "yOffset": -90 }
+  ],
+  "transitions": [
+    { "id": "idle-move", "from": "idle", "to": "move", "variant": "emphasis" },
+    { "id": "move-sprint", "from": "move", "to": "sprint", "variant": "emphasis" },
+    { "id": "sprint-aim", "from": "sprint", "to": "aiming", "variant": "emphasis" },
+    { "id": "move-hover", "from": "move", "to": "hover", "variant": "default", "route": "drop" },
+    { "id": "hover-move", "from": "hover", "to": "move", "label": "接地", "variant": "default", "route": "top-channel" },
+    { "id": "idle-dead", "from": "idle", "to": "dead", "label": "HP = 0", "variant": "security", "route": "bottom-channel" }
+  ],
+  "cards": []
+}

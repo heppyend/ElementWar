@@ -1,5 +1,6 @@
 ﻿using System.Collections;
 using System.Collections.Generic;
+using TMPro;
 using UnityEngine;
 using UnityEngine.AI;
 using UnityEngine.Animations.Rigging;
@@ -123,6 +124,10 @@ public class PlayerModel : MonoBehaviour,IStateMachineOwner
     #endregion
 
     #region 生命值相关
+    // 对应 Assets/CombatGirlsCharacterPack/RifleGirl/Animations/Normal 下 FBX 导出的 Clip 名。
+    private const string DEFAULT_HIT_ANIMATION = "Hit1";
+    private const string DEFAULT_DEAD_ANIMATION = "Die2";
+
     [Tooltip("最大生命值")]
     public int maxHealth = 100;
     [HideInInspector]
@@ -131,6 +136,14 @@ public class PlayerModel : MonoBehaviour,IStateMachineOwner
     public bool isDead;//是否已死亡
     [Tooltip("受击动画名（留空则不播放，需 Animator 中存在对应 clip）")]
     public string hitAnimationName = "";
+    [Tooltip("受击专用 Animator 层名。该层必须是 Override + 上半身 Avatar Mask；未配置时受击动作安全跳过，不再覆盖移动层。")]
+    public string hitReactionLayerName = "HitUpperBody";
+    [Tooltip("受击层显示时长（秒）。到期后淡出，底层 Move/Sprint 始终持续驱动下半身。")]
+    [Range(0.05f, 1f)]
+    public float hitReactionDuration = 0.32f;
+    [Tooltip("受击层淡出耗时（秒）。")]
+    [Range(0.01f, 0.3f)]
+    public float hitReactionFadeOutDuration = 0.06f;
     [Tooltip("死亡动画名（留空则不播放，需 Animator 中存在对应 clip）")]
     public string deadAnimationName = "";
     [Tooltip("受击时是否震动相机")]
@@ -141,6 +154,39 @@ public class PlayerModel : MonoBehaviour,IStateMachineOwner
     public float healthBarHeight = 2.3f;
     [HideInInspector]
     public PlayerHealthBar playerHealthBar;//玩家血条（Awake 时动态挂载，仅主控显示）
+    #endregion
+
+    #region 受击表现与运行时诊断
+    [Header("PVE 运行时状态诊断")]
+    [Tooltip("PVE 运行时在头顶显示 FSM、Animator Clip 与受击层状态，便于排查动画覆盖。")]
+    public bool showStateDebugLabel = true;
+    [Tooltip("状态诊断标签相对角色根节点的高度。")]
+    public float stateDebugLabelHeight = 2.95f;
+    [Tooltip("状态标签字体；留空时使用 TMP 默认字体。")]
+    public TMP_FontAsset stateDebugFont;
+    [Tooltip("状态标签文字大小。")]
+    [Range(0.5f, 8f)]
+    public float stateDebugFontSize = 3.2f;
+    [Tooltip("状态标签世界缩放。")]
+    [Range(0.03f, 0.3f)]
+    public float stateDebugLabelScale = 0.1f;
+    [Tooltip("状态标签文字颜色。")]
+    public Color stateDebugTextColor = new Color(0.35f, 0.95f, 1f, 1f);
+    [Tooltip("状态标签描边颜色。")]
+    public Color stateDebugOutlineColor = new Color(0f, 0f, 0f, 0.9f);
+    [Tooltip("状态标签描边宽度。")]
+    [Range(0f, 0.5f)]
+    public float stateDebugOutlineWidth = 0.16f;
+    [Tooltip("勾选时额外显示 Animator 当前 Clip；关闭后只显示业务 FSM 状态。")]
+    public bool stateDebugShowAnimatorClips = true;
+    [Tooltip("状态标签刷新间隔（秒）。")]
+    [Range(0.02f, 1f)]
+    public float stateDebugRefreshInterval = 0.1f;
+    [HideInInspector]
+    public PlayerStateDebugLabel stateDebugLabel;
+
+    private int hitReactionLayerIndex = -1;
+    private float hitReactionEndTime = -1f;
     #endregion
 
     #region 人机相关
@@ -177,6 +223,11 @@ public class PlayerModel : MonoBehaviour,IStateMachineOwner
         if (!disableStateMachine)
             SwitchState(PlayerState.Idle);
         ExitAim();
+
+        CacheHitReactionLayer();
+        // PVE 才自动建立头顶诊断；PVP 由 NetClient/RemoteAvatar 在网络身份就绪后显式建立。
+        if (!disableStateMachine && PlayerController.INSTANCE != null && showStateDebugLabel)
+            EnsureStateDebugLabel();
     }
 
    
@@ -187,6 +238,7 @@ public class PlayerModel : MonoBehaviour,IStateMachineOwner
 
     void LateUpdate()
     {
+        UpdateHitReactionLayer();
         // FPS 式移动：位移完全由代码驱动（水平 horizontalVelocity + 垂直 verticalSpeed）。
         // 用 LateUpdate 而非 Update：确保状态类（经 MonoManager 集中式 Update，通常早于本帧）
         // 先写入 horizontalVelocity，本 LateUpdate 再 Move——避免"先移动后写值"导致位移被吞。
@@ -236,16 +288,16 @@ public class PlayerModel : MonoBehaviour,IStateMachineOwner
         if (isDead) return;//已死亡不再受击
         currentHealth -= damage;
 
-        // 受击动画（动画名留空则跳过，防止 Animator 中不存在对应 clip 时刷警告）
-        if (!string.IsNullOrEmpty(hitAnimationName))
-            PlayStateAnimation(hitAnimationName, 0.1f);
+        // 受击只在专用上半身层播放；第 0 层继续维持 Move/Sprint，避免随从待机平移。
+        PlayHitReaction(GetAnimationName(hitAnimationName, DEFAULT_HIT_ANIMATION));
 
         // 相机震动反馈
-        if (shakeOnHit)
+        if (shakeOnHit && PlayerController.INSTANCE != null)
             PlayerController.INSTANCE.ShakeCamera();
 
         // 更新血条 HUD（仅主控显示）
-        if (playerHealthBar != null && PlayerController.INSTANCE.currentPlayerModel == this)
+        if (playerHealthBar != null && PlayerController.INSTANCE != null &&
+            PlayerController.INSTANCE.currentPlayerModel == this)
             playerHealthBar.SetHealth((float)currentHealth / maxHealth);
 
         // 生命值归零 → 死亡
@@ -263,9 +315,9 @@ public class PlayerModel : MonoBehaviour,IStateMachineOwner
     {
         isDead = true;
 
-        // 死亡动画（动画名留空则跳过）
-        if (!string.IsNullOrEmpty(deadAnimationName))
-            PlayStateAnimation(deadAnimationName, 0.1f);
+        // 死亡动画：未在 Inspector 覆盖时，3 个 PVE 角色统一使用 RifleGirl 的死亡状态名。
+        ClearHitReaction();
+        PlayReactionAnimation(GetAnimationName(deadAnimationName, DEFAULT_DEAD_ANIMATION), 0.1f);
 
         // 停止状态机（状态 Update 注销），禁用移动与寻路
         stateMachine.Stop();
@@ -285,18 +337,26 @@ public class PlayerModel : MonoBehaviour,IStateMachineOwner
         if (isDead) return;
         isDead = true;
         if (cc != null) cc.enabled = false;
-        if (!string.IsNullOrEmpty(deadAnimationName))
-            PlayStateAnimation(deadAnimationName, 0.1f);
+        ClearHitReaction();
+        PlayReactionAnimation(GetAnimationName(deadAnimationName, DEFAULT_DEAD_ANIMATION), 0.1f);
     }
 
     /// <summary>PVP 网络重生（disableStateMachine 模式下由 NetClient 调用）：复位血/位置/CC。</summary>
     public void ApplyRespawnNetwork(Vector3 pos, int health, int maxHealthValue)
     {
         isDead = false;
+        ClearHitReaction();
         currentHealth = health;
         maxHealth = maxHealthValue;
         transform.position = pos;
         if (cc != null) cc.enabled = true;
+    }
+
+    /// <summary>PVP 仅在收到服务器权威 HitEvent 后调用，不参与伤害或生命判定。</summary>
+    public void PlayAuthoritativeHitReaction()
+    {
+        if (isDead) return;
+        PlayHitReaction(GetAnimationName(hitAnimationName, DEFAULT_HIT_ANIMATION));
     }
 
     /// <summary>
@@ -337,8 +397,131 @@ public class PlayerModel : MonoBehaviour,IStateMachineOwner
     /// <param name="layer">动画层</param>
     public void PlayStateAnimation(string animationName,float transition=0.25f,int layer = 0)
     {
-        if (animator == null) return;
+        if (animator == null || string.IsNullOrWhiteSpace(animationName)) return;
         animator.CrossFadeInFixedTime(animationName, transition, layer);
+    }
+
+    /// <summary>
+    /// 播放受击/死亡等可选动作。空字段使用第 0 层的默认状态名；Inspector 也可以填完整状态路径。
+    /// 先用 HasState 校验，避免某个角色尚未配置该动作时 Animator 自己刷 GotoState 警告。
+    /// </summary>
+    private void PlayReactionAnimation(string animationStateName, float transition)
+    {
+        if (animator == null || string.IsNullOrWhiteSpace(animationStateName)) return;
+
+        string fullPath = animationStateName.Contains(".")
+            ? animationStateName
+            : $"{animator.GetLayerName(0)}.{animationStateName}";
+        int stateHash = Animator.StringToHash(fullPath);
+        if (!animator.HasState(0, stateHash)) return;
+
+        animator.CrossFadeInFixedTime(stateHash, transition, 0);
+    }
+
+    private void CacheHitReactionLayer()
+    {
+        hitReactionLayerIndex = animator != null && !string.IsNullOrWhiteSpace(hitReactionLayerName)
+            ? animator.GetLayerIndex(hitReactionLayerName)
+            : -1;
+        if (hitReactionLayerIndex >= 0)
+            animator.SetLayerWeight(hitReactionLayerIndex, 0f);
+    }
+
+    private void PlayHitReaction(string animationStateName)
+    {
+        if (animator == null || string.IsNullOrWhiteSpace(animationStateName)) return;
+        if (hitReactionLayerIndex < 0) CacheHitReactionLayer();
+        if (hitReactionLayerIndex < 0) return;
+
+        string fullPath = $"{animator.GetLayerName(hitReactionLayerIndex)}.{animationStateName}";
+        int stateHash = Animator.StringToHash(fullPath);
+        if (!animator.HasState(hitReactionLayerIndex, stateHash)) return;
+
+        animator.SetLayerWeight(hitReactionLayerIndex, 1f);
+        animator.CrossFadeInFixedTime(stateHash, 0.04f, hitReactionLayerIndex);
+        hitReactionEndTime = Time.time + hitReactionDuration;
+    }
+
+    private void UpdateHitReactionLayer()
+    {
+        if (animator == null || hitReactionLayerIndex < 0 || hitReactionEndTime < 0f) return;
+        if (Time.time < hitReactionEndTime) return;
+
+        float nextWeight = Mathf.MoveTowards(
+            animator.GetLayerWeight(hitReactionLayerIndex),
+            0f,
+            Time.deltaTime / Mathf.Max(0.01f, hitReactionFadeOutDuration));
+        animator.SetLayerWeight(hitReactionLayerIndex, nextWeight);
+        if (nextWeight <= 0f)
+            hitReactionEndTime = -1f;
+    }
+
+    private void ClearHitReaction()
+    {
+        hitReactionEndTime = -1f;
+        if (animator != null && hitReactionLayerIndex >= 0)
+            animator.SetLayerWeight(hitReactionLayerIndex, 0f);
+    }
+
+    /// <summary>建立头顶状态标签；PVP 可传入网络表现状态提供器，避免误报为旧 PVE FSM。</summary>
+    public void EnsureStateDebugLabel(System.Func<string> customTextProvider = null)
+    {
+        if (!showStateDebugLabel) return;
+        stateDebugLabel = GetComponent<PlayerStateDebugLabel>();
+        if (stateDebugLabel == null)
+            stateDebugLabel = gameObject.AddComponent<PlayerStateDebugLabel>();
+        stateDebugLabel.SetTextProvider(customTextProvider);
+    }
+
+    /// <summary>供头顶诊断使用：FSM 状态、底层/受击层实际 Clip 与控制身份。</summary>
+    public string GetStateDebugText()
+    {
+        string control = PlayerController.INSTANCE != null && PlayerController.INSTANCE.currentPlayerModel == this
+            ? "主控"
+            : "跟随";
+        string life = isDead ? "死亡" : "存活";
+        if (!stateDebugShowAnimatorClips)
+            return $"{life} | {control}\nFSM: {currentState}";
+
+        string baseClip = GetCurrentClipName(0);
+        string hitClip = hitReactionLayerIndex >= 0
+            ? (hitReactionEndTime >= 0f ? GetCurrentClipName(hitReactionLayerIndex) : "-")
+            : "层缺失";
+        return $"{life} | {control}\nFSM: {currentState}\nL0: {baseClip}\n上身: {hitClip}";
+    }
+
+    /// <summary>PVP 头顶诊断：网络表现状态由 PvPMotor/RemoteAvatar 传入，Animator Clip 由此模型读取。</summary>
+    public string GetPvpStateDebugText(string ownership, string visualState)
+    {
+        string life = isDead ? "死亡" : "存活";
+        if (!stateDebugShowAnimatorClips)
+            return $"{life} | PVP {ownership}\n状态: {visualState}";
+
+        string baseClip = GetCurrentClipName(0);
+        string hitClip = hitReactionLayerIndex >= 0
+            ? (hitReactionEndTime >= 0f ? GetCurrentClipName(hitReactionLayerIndex) : "-")
+            : "层缺失";
+        return $"{life} | PVP {ownership}\n状态: {visualState}\nL0: {baseClip}\n上身: {hitClip}";
+    }
+
+    private string GetCurrentClipName(int layer)
+    {
+        if (animator == null || layer < 0 || layer >= animator.layerCount) return "-";
+        AnimatorClipInfo[] clips = animator.GetCurrentAnimatorClipInfo(layer);
+        return clips.Length > 0 && clips[0].clip != null ? clips[0].clip.name : "-";
+    }
+
+    /// <summary>
+    /// RifleGirl 的 Die2 带有遗留的武器挂点 Animation Event（字符串参数）。
+    /// 旧 PVE 不使用该套挂点切换，保留空接收器以消除无接收者报错。
+    /// </summary>
+    public void SwitchSocket(string socketName)
+    {
+    }
+
+    private static string GetAnimationName(string configuredName, string defaultName)
+    {
+        return string.IsNullOrWhiteSpace(configuredName) ? defaultName : configuredName;
     }
 
     /// <summary>Locomotion Speed 参数按速率平滑逼近目标值（FPS 式移动）</summary>

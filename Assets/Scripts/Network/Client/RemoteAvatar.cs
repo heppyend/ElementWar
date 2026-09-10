@@ -48,6 +48,9 @@ namespace ElementWar.Net
         private float _settlementDuration;
         private float _settlementScale;
         private Vector3 _settlementVelocity;
+        private int _lifeStateVersion;
+        private int _minimumSnapshotTick;
+        private int _airborneSnapshotStreak;
 
         public int PlayerId { get; private set; }
         public bool IsDead { get; private set; }
@@ -101,20 +104,30 @@ namespace ElementWar.Net
             _animator = _model != null ? _model.animator : go.GetComponentInChildren<Animator>();
             _healthBar = _model != null ? _model.playerHealthBar : null;
             if (_healthBar != null) _healthBar.alwaysShowHealthBar = true;
+            if (_model != null)
+                _model.EnsureStateDebugLabel(GetPvpStateDebugText);
             WireAimTarget(go);
         }
 
-        public void ApplyPlayerState(PlayerSnapshotMessage s, int snapServerTick)
+        public bool ApplyPlayerState(PlayerSnapshotMessage s, int snapServerTick)
         {
+            if (snapServerTick < _minimumSnapshotTick || s.lifeStateVersion < _lifeStateVersion)
+                return false;
+
+            _lifeStateVersion = Mathf.Max(_lifeStateVersion, s.lifeStateVersion);
             _lastServerTick = Mathf.Max(_lastServerTick, snapServerTick);
+            Vector3 snapshotPosition = new Vector3(s.x, s.y, s.z);
+            float groundY = _model != null && _model.cc != null
+                ? Mathf.Max(0.02f, _model.cc.height * 0.5f - _model.cc.center.y)
+                : PvPMotor.GroundY;
             var st = new BufferedState
             {
                 serverTick = snapServerTick,
-                pos = new Vector3(s.x, s.y, s.z),
+                pos = snapshotPosition,
                 yaw = s.bodyYawDeg,
                 speedBlend = s.speedBlend,
                 verticalSpeed = s.verticalSpeed,
-                isGrounded = s.isGrounded,
+                isGrounded = StabilizeGroundedState(snapshotPosition, s.verticalSpeed, s.isGrounded, groundY),
                 aim = new Vector3(s.aimX, s.aimY, s.aimZ),
                 moveState = s.moveState,
             };
@@ -137,28 +150,34 @@ namespace ElementWar.Net
                 _renderInited = true;
             }
 
-            if (!IsDead && !s.isAlive) ApplyDeath();
+            if (!IsDead && !s.isAlive) ApplyDeath(s.lifeStateVersion, snapServerTick);
+            return true;
         }
 
-        public void ApplyDeath()
+        public void ApplyDeath(int lifeStateVersion, int serverTick)
         {
+            _lifeStateVersion = Mathf.Max(_lifeStateVersion, lifeStateVersion);
+            _minimumSnapshotTick = Mathf.Max(_minimumSnapshotTick, serverTick);
             IsDead = true;
-            // 角色当前 Animator 没有统一的 Dead 状态时，不强行 CrossFade 到不存在的状态，
-            // 否则每次死亡事件都会产生 Animator.GotoState 警告并扰乱表现层。
-            if (_animator != null && _model != null && !string.IsNullOrEmpty(_model.deadAnimationName))
-            {
-                _animator.CrossFadeInFixedTime(_model.deadAnimationName, 0.1f);
-            }
-            // 简单死亡表现：躺下（禁用移动，让动画播放）
+            if (_model != null)
+                _model.ApplyDeathNetwork();
         }
 
         public void ApplyRespawn(ReliableEventMessage e)
         {
+            _lifeStateVersion = Mathf.Max(_lifeStateVersion, e.lifeStateVersion);
+            _minimumSnapshotTick = Mathf.Max(_minimumSnapshotTick, e.serverTick);
             IsDead = false;
             transform.position = new Vector3(e.x, e.y, e.z);
             transform.rotation = Quaternion.Euler(0f, e.bodyYawDeg, 0f);
+            LatestAuthoritativePosition = transform.position;
+            if (_model != null)
+                _model.ApplyRespawnNetwork(new Vector3(e.x, e.y, e.z), e.health, e.maxHealth);
             _buffer.Clear();
             _renderInited = false;   // 重生：重新对齐渲染游标到新缓冲开头
+            _animState = -1;
+            _airborneSnapshotStreak = 0;
+            _hasLastRenderPos = false;
         }
 
         public void ApplyHealth(int health, int maxHealth)
@@ -180,10 +199,50 @@ namespace ElementWar.Net
 
         public void ApplyHit(Vector3 hitPoint)
         {
-            if (_model == null || _model.weapon == null) return;
+            if (_model == null) return;
+            _model.PlayAuthoritativeHitReaction();
+            if (_model.weapon == null) return;
             var bulletPrefab = _model.weapon.bulletEffectPrefab;
             if (bulletPrefab != null && bulletPrefab.impactPrefab != null)
                 EffectPool.INSTANCE.GetEffect(bulletPrefab.impactPrefab, hitPoint, Quaternion.identity);
+        }
+
+        /// <summary>训练 Bot 的视觉节奏跟随服务器移动倍率；仅 Bot 调用，不影响真人远端 Avatar。</summary>
+        public void SetBotAnimationSpeed(float speedMultiplier)
+        {
+            if (_animator != null) _animator.speed = Mathf.Clamp(speedMultiplier, 0.1f, 1f);
+        }
+
+        /// <summary>落地附近偶发的单个未接地快照只作网络噪声处理；连续三帧或上升跳跃才进入 Hover。</summary>
+        private bool StabilizeGroundedState(Vector3 position, float verticalSpeed, bool reportedGrounded, float groundY)
+        {
+            bool normalized = PvPMotor.NormalizeGroundedState(position, verticalSpeed, reportedGrounded, groundY);
+            if (normalized)
+            {
+                _airborneSnapshotStreak = 0;
+                return true;
+            }
+            if (verticalSpeed > 0.01f)
+            {
+                _airborneSnapshotStreak = 3;
+                return false;
+            }
+            return ++_airborneSnapshotStreak < 3;
+        }
+
+        private string GetPvpStateDebugText()
+        {
+            string visualState = _animState switch
+            {
+                1 => "Move",
+                2 => "Aiming",
+                3 => "Hover",
+                4 => "Slide",
+                _ => "Idle",
+            };
+            return _model != null
+                ? _model.GetPvpStateDebugText($"远端 P{PlayerId}", visualState)
+                : $"PVP 远端 P{PlayerId}";
         }
 
         private void WireAimTarget(GameObject avatar)
@@ -304,7 +363,7 @@ namespace ElementWar.Net
                     {
                         case 1:
                         case 2: desired = 1; break;   // Move（Sprint 靠 Speed→1 走 Dash 段）
-                        case 3: desired = latest.speedBlend > 0.01f ? 2 : 0; break; // 静止瞄准保持待机，IK仍单独生效
+                        case 3: desired = 2; break; // 静止瞄准也进入 Aiming：AimingX/Y=0 保持下半身静止，IK 驱动上半身瞄准/开火
                         case 4: desired = 3; break;   // Hover
                         case 5: desired = 4; break;   // Slide
                         default: desired = 0; break;  // Idle

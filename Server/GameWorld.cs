@@ -29,7 +29,7 @@ public sealed class GameWorldSettings
     public float RotationSpeedDeg = 300f;
     public int MaxHealth = 100;
     public int FireDamage = 25;
-    public int BotFireDamage = 0;                // 训练 Bot 只用于同步验证，不扣真人血量
+    public int BotFireDamage = 1;                // 训练 Bot 造成轻微伤害，仍走完整受击/死亡权威链路
     public float FireCooldownSeconds = 0.15f;   // 与客户端视觉射速一致（PVE bulletInterval=0.15s），否则视觉 6.67 发/秒只有 1/5 结算
     public int WeaponMagazineCapacity = 30;
     public int WeaponReserveAmmo = 90;
@@ -54,8 +54,15 @@ public sealed class GameWorldSettings
     // ---- 训练 bot ----
     public bool EnableBots = false;            // 默认关闭（单人纯测试）；`--bots` 开训练模式补位
     public string BotName = "训练Bot";
-    public float BotChaseRange = 14f;          // 与目标距离超过该值则追击
-    public float BotBackRange = 6f;            // 距离过近则后撤
+    public float BotFireRange = 14f;           // 训练 Bot 的开火半径；客户端调试可视化读取同一服务器值
+    public float BotVisionRange = 24f;         // 视野最大半径；目标超过此距离必定不可见
+    public float BotFieldOfViewDegrees = 120f; // 以前方为中心的水平扇形视野
+    public float BotLostSightSeconds = 3f;     // 丢失视野多久后改为搜索式追踪
+    public float BotSearchOffsetDistance = 4f; // 搜索目标在最后逻辑目标周围的随机偏移
+    public float BotSearchSpeed = 1.4f;        // 搜索慢走速度，绝不进入 sprint
+    public float BotMoveSpeedMultiplier = 0.5f; // 训练 Bot 总移动速度缩放；客户端 Bot 动画使用同值
+    public int BotBlockedMoveTickThreshold = 4; // 4 次连续顶墙即绕行（原 8 次，避障响应加倍）
+    public int BotWallFollowTicks = 144;       // 顶墙后沿墙搜索约 2.4 秒（原 1.2 秒，避障持续时间加倍）
     public float BotAimErrorFactor = 0.06f;    // 瞄准误差 = 距离 * factor + base（米，防激光枪）
     public float BotAimErrorBase = 0.8f;
     public int BotDecisionTicksMin = 30;       // AI 决策间隔（60Hz tick）：0.5s
@@ -153,6 +160,12 @@ public sealed class ServerPlayer
     public int BotNextDecisionTick;             // 下次决策（换侧移方向 / 瞄准误差）
     public int BotStrafeDir = 1;                // 侧移方向 ±1
     public Vec3 BotAimError = new(0f, 0f, 1f);  // 瞄准误差单位偏移（XZ，决策时刷新）
+    public Vec3 BotSearchOffset = Vec3.Zero;
+    public int BotLastSeenTick;
+    public bool BotHasVisualContact;
+    public int BotBlockedMoveTicks;
+    public int BotWallFollowTicksRemaining;
+    public Vec3 BotWallFollowDirection = Vec3.Zero;
 }
 
 // ---- 可靠事件（逻辑层，wire eventId 由 UdpGameServer 分配）----
@@ -233,6 +246,18 @@ public sealed class GameWorld
     }
 
     public ServerPlayer? GetPlayer(int playerId) => _players.TryGetValue(playerId, out var p) ? p : null;
+
+    /// <summary>训练模式下的受控调参入口。仅服务器最终写入，客户端只据回包画调试图。</summary>
+    public bool TryApplyBotTuning(float fireRange, float visionRange, float fieldOfViewDegrees)
+    {
+        if (!Settings.EnableBots || !float.IsFinite(fireRange) || !float.IsFinite(visionRange) || !float.IsFinite(fieldOfViewDegrees)) return false;
+        if (fireRange < 1f || fireRange > Settings.FireRange || visionRange < fireRange || visionRange > Settings.FireRange || fieldOfViewDegrees < 10f || fieldOfViewDegrees > 180f)
+            return false;
+        Settings.BotFireRange = fireRange;
+        Settings.BotVisionRange = visionRange;
+        Settings.BotFieldOfViewDegrees = fieldOfViewDegrees;
+        return true;
+    }
 
     /// <summary>各角色脚底偏移（CharacterController 中心 - 高度/2；与客户端 PvPMotor 计算一致）。</summary>
     private static float GetGroundY(int characterId) => characterId switch
@@ -455,7 +480,7 @@ public sealed class GameWorld
 
     private int SlideTotalTicks => (int)Math.Round(Settings.SlideDurationSeconds * Settings.ServerTickRate);
 
-    private void SimulatePlayer(ServerPlayer p, PlayerInputMessage? input, float dt)
+    private void SimulatePlayer(ServerPlayer p, PlayerInputMessage? input, float dt, float speedMultiplier = 1f)
     {
         // 跳跃：独立于当前输入帧处理（JumpQueued 跨 tick 保留，即使本 tick 无新输入也起跳）。
         // 跳跃可中断滑铲。
@@ -482,7 +507,10 @@ public sealed class GameWorld
             {
                 p.SpeedBlend = 0f;
                 p.MoveState = 0;
+                return;
             }
+            // 角色若在跳跃/下落途中丢失输入，仍必须继续重力和落地结算，不能冻结在 Hover。
+            SimulateAirborneWithoutInput(p, dt);
             return;
         }
 
@@ -511,9 +539,9 @@ public sealed class GameWorld
         float speed = 0f;
         if (moving)
         {
-            speed = input.IsSprint ? Settings.SprintSpeed
+            speed = (input.IsSprint ? Settings.SprintSpeed
                   : aiming ? Settings.AimMoveSpeed
-                  : Settings.JogSpeed;
+                  : Settings.JogSpeed) * Math.Clamp(speedMultiplier, 0f, 1f);
         }
 
         // 位移方向：瞄准沿输入（侧移）；非瞄准沿当前朝向（与客户端 PvPMotor 一致——
@@ -583,6 +611,37 @@ public sealed class GameWorld
         }
     }
 
+    private void SimulateAirborneWithoutInput(ServerPlayer p, float dt)
+    {
+        p.VerticalSpeed += Settings.Gravity * dt;
+        Vec3 newPos = new(p.Position.X, p.Position.Y + p.VerticalSpeed * dt, p.Position.Z);
+        newPos = _collision.ResolveMovement(p.Position, newPos, p.GroundY);
+        float feetY = newPos.Y - p.GroundY;
+        if (p.VerticalSpeed <= 0f && _collision.TryGetWalkableHeight(newPos.X, newPos.Z, feetY,
+                GameWorldSettings.WalkableStepHeight, out float walkableY))
+        {
+            newPos = new Vec3(newPos.X, walkableY + p.GroundY, newPos.Z);
+            p.VerticalSpeed = 0f;
+            p.IsGrounded = true;
+            p.MoveState = 0;
+            p.SpeedBlend = 0f;
+        }
+        else if (newPos.Y <= p.GroundY)
+        {
+            newPos = new Vec3(newPos.X, p.GroundY, newPos.Z);
+            p.VerticalSpeed = 0f;
+            p.IsGrounded = true;
+            p.MoveState = 0;
+            p.SpeedBlend = 0f;
+        }
+        else
+        {
+            p.IsGrounded = false;
+            p.MoveState = 4;
+        }
+        p.Position = newPos;
+    }
+
     /// <summary>滑铲推进：方向锁定、速度衰减、强制贴地（与客户端 PvPMotor 数学一致）。</summary>
     private void StepSlide(ServerPlayer p, float dt)
     {
@@ -611,7 +670,7 @@ public sealed class GameWorld
 
     // ---------------- 训练 bot AI ----------------
 
-    /// <summary>bot 自驱移动：追击 / 后撤 / 侧移走位 + 面向目标。合成输入喂 SimulatePlayer（复用同一简化数学）。</summary>
+    /// <summary>bot 自驱移动：视野内追击/站立瞄准；丢失视野后改为低速搜索。合成输入喂 SimulatePlayer。</summary>
     private void SimulateBot(ServerPlayer p, float dt)
     {
         var target = GetBotTarget(p);
@@ -622,48 +681,94 @@ public sealed class GameWorld
             return;
         }
 
-        // 周期决策：换侧移方向 + 刷新瞄准误差
+        Vec3 toTarget = target.Position - p.Position;
+        Vec3 horizontalToTarget = new(toTarget.X, 0f, toTarget.Z);
+        float dist = horizontalToTarget.Magnitude;
+        Vec3 toDir = dist > 1e-4f ? horizontalToTarget * (1f / dist) : ForwardFromYaw(p.BodyYawDeg);
+        bool hasVisualContact = IsBotTargetVisible(p, target, toDir, dist);
+        p.BotHasVisualContact = hasVisualContact;
+        if (hasVisualContact)
+        {
+            p.BotLastSeenTick = ServerTick;
+            p.BotBlockedMoveTicks = 0;
+            p.BotWallFollowTicksRemaining = 0;
+            p.BotWallFollowDirection = Vec3.Zero;
+        }
+
+        // 周期决策：刷新瞄准误差；搜索期同时更换围绕逻辑目标的偏移方向。
         if (ServerTick >= p.BotNextDecisionTick)
         {
             p.BotNextDecisionTick = ServerTick + BotRand.Next(Settings.BotDecisionTicksMin, Settings.BotDecisionTicksMax + 1);
             p.BotStrafeDir = BotRand.Next(2) == 0 ? 1 : -1;
             p.BotAimError = RandomUnitVectorXZ();
+            p.BotSearchOffset = RandomUnitVectorXZ() * Settings.BotSearchOffsetDistance;
         }
 
-        Vec3 toTarget = target.Position - p.Position;
-        float dist = toTarget.Magnitude;
-        Vec3 toDir = dist > 1e-4f ? toTarget * (1f / dist) : new Vec3(0f, 0f, 1f);
-
-        // 移动模式：远→追击（冲刺），过近→后撤，中距→侧移走位（瞄准移动）
-        Vec3 move = Vec3.Zero;
-        bool sprint = false, aiming = false;
-        if (dist > Settings.BotChaseRange)
+        // 视野内且进入射击距离：下半身保持静止，仅使用瞄准状态驱动上半身。
+        if (hasVisualContact && dist <= Settings.BotFireRange)
         {
-            move = toDir;
-            sprint = true;
-        }
-        else if (dist < Settings.BotBackRange)
-        {
-            move = toDir * -1f;   // 后撤
-        }
-        else
-        {
-            Vec3 right = new(toDir.Z, 0f, -toDir.X);   // 绕 Y 右向量
-            move = right * p.BotStrafeDir;
-            aiming = true;
+            p.BodyYawDeg = Vec3.ToYawDeg(toDir);
+            SimulatePlayer(p, new PlayerInputMessage
+            {
+                IsAiming = true,
+                BodyYawDeg = p.BodyYawDeg,
+            }, dt);
+            return;
         }
 
-        p.BodyYawDeg = Vec3.ToYawDeg(toDir);   // 面向目标（SimulatePlayer 不设 yaw，bot 自行设）
+        int lostSightTicks = ServerTick - p.BotLastSeenTick;
+        int searchAfterTicks = Math.Max(1, (int)Math.Round(Settings.BotLostSightSeconds * Settings.ServerTickRate));
+        if (!hasVisualContact && lostSightTicks > searchAfterTicks)
+        {
+            // 搜索不再锁死目标的精确位置：以玩家当前位置为逻辑中心，朝随机偏移慢走。
+            Vec3 searchTarget = target.Position + p.BotSearchOffset;
+            Vec3 toSearch = searchTarget - p.Position;
+            Vec3 searchDir = toSearch.Magnitude > 1e-4f ? toSearch.NormalizedXZ() : RandomUnitVectorXZ();
+            SimulateBotSearchMove(p, searchDir, searchTarget, dt);
+            return;
+        }
+
+        // 仍在可见/短期记忆内：精确追到射击距离；不在射程时绝不射击。
+        p.BodyYawDeg = Vec3.ToYawDeg(toDir);
         var input = new PlayerInputMessage
         {
-            WorldMoveX = move.X,
-            WorldMoveZ = move.Z,
-            IsSprint = sprint,
-            IsAiming = aiming,
+            WorldMoveX = toDir.X,
+            WorldMoveZ = toDir.Z,
+            IsSprint = true,
+            IsAiming = false,
             BodyYawDeg = p.BodyYawDeg,
         };
-        SimulatePlayer(p, input, dt);
+        SimulatePlayer(p, input, dt, Settings.BotMoveSpeedMultiplier);
     }
+
+    private static Vec3 ForwardFromYaw(float yawDeg)
+    {
+        float yawRad = yawDeg * MathF.PI / 180f;
+        return new Vec3(MathF.Sin(yawRad), 0f, MathF.Cos(yawRad));
+    }
+
+    private bool IsInBotFieldOfView(ServerPlayer bot, Vec3 targetDirection)
+    {
+        Vec3 forward = ForwardFromYaw(bot.BodyYawDeg);
+        float dot = forward.X * targetDirection.X + forward.Z * targetDirection.Z;
+        float halfFovRadians = Math.Clamp(Settings.BotFieldOfViewDegrees, 1f, 359f) * MathF.PI / 360f;
+        return dot >= MathF.Cos(halfFovRadians);
+    }
+
+    /// <summary>权威可见性：距离 + 扇角 + 与命中使用同一静态碰撞 Profile 的视线遮挡。</summary>
+    private bool IsBotTargetVisible(ServerPlayer bot, ServerPlayer target, Vec3 horizontalTargetDirection, float horizontalDistance)
+    {
+        if (horizontalDistance > Settings.BotVisionRange || !IsInBotFieldOfView(bot, horizontalTargetDirection)) return false;
+        Vec3 origin = GetEyePosition(bot);
+        Vec3 targetEye = GetEyePosition(target);
+        Vec3 sight = targetEye - origin;
+        float sightDistance = sight.Magnitude;
+        if (sightDistance <= 1e-4f) return true;
+        return !_collision.RaycastStaticGeometry(origin, sight * (1f / sightDistance), sightDistance - 0.001f, out _);
+    }
+
+    private Vec3 GetEyePosition(ServerPlayer p) =>
+        new(p.Position.X, p.Position.Y + (Settings.EyeHeight - p.GroundY), p.Position.Z);
 
     /// <summary>bot 目标：最近存活的人类（训练）；无人类则最近存活其他玩家。</summary>
     private ServerPlayer? GetBotTarget(ServerPlayer bot)
@@ -688,15 +793,73 @@ public sealed class GameWorld
         return new Vec3((float)Math.Cos(ang), 0f, (float)Math.Sin(ang));
     }
 
-    /// <summary>bot 开火：射程 + 冷却 + 瞄准（带误差与朝向校验），复用与人类同一射线命中。</summary>
+    /// <summary>搜索期顶墙时，改用可通行的左右切向方向，短时间沿墙绕行而非持续推向墙体。</summary>
+    private void SimulateBotSearchMove(ServerPlayer p, Vec3 searchDirection, Vec3 searchTarget, float dt)
+    {
+        Vec3 moveDirection = searchDirection;
+        if (p.BotWallFollowTicksRemaining > 0 && p.BotWallFollowDirection.Magnitude > 1e-4f)
+        {
+            moveDirection = p.BotWallFollowDirection;
+            p.BotWallFollowTicksRemaining--;
+        }
+
+        p.BodyYawDeg = Vec3.ToYawDeg(moveDirection);
+        Vec3 before = p.Position;
+        float speedMultiplier = Settings.BotSearchSpeed / Math.Max(0.001f, Settings.JogSpeed) * Settings.BotMoveSpeedMultiplier;
+        SimulatePlayer(p, new PlayerInputMessage
+        {
+            WorldMoveX = moveDirection.X,
+            WorldMoveZ = moveDirection.Z,
+            IsSprint = false,
+            IsAiming = false,
+            BodyYawDeg = p.BodyYawDeg,
+        }, dt, speedMultiplier);
+
+        float actualDistance = HorizontalDistance(before, p.Position);
+        float expectedDistance = Settings.BotSearchSpeed * Settings.BotMoveSpeedMultiplier * dt;
+        if (actualDistance < expectedDistance * 0.35f)
+        {
+            p.BotBlockedMoveTicks++;
+            if (p.BotBlockedMoveTicks >= Math.Max(1, Settings.BotBlockedMoveTickThreshold))
+            {
+                p.BotWallFollowDirection = ChooseWallFollowDirection(p, searchDirection, searchTarget);
+                p.BotWallFollowTicksRemaining = Math.Max(1, Settings.BotWallFollowTicks);
+                p.BotBlockedMoveTicks = 0;
+            }
+        }
+        else
+        {
+            p.BotBlockedMoveTicks = Math.Max(0, p.BotBlockedMoveTicks - 1);
+        }
+    }
+
+    private Vec3 ChooseWallFollowDirection(ServerPlayer p, Vec3 blockedDirection, Vec3 searchTarget)
+    {
+        Vec3 left = new(-blockedDirection.Z, 0f, blockedDirection.X);
+        Vec3 right = left * -1f;
+        float probe = Math.Max(Settings.CollisionRadius * 2f, Settings.BotSearchSpeed * 0.5f);
+        Vec3 leftEnd = _collision.ResolveMovement(p.Position, p.Position + left * probe, p.GroundY);
+        Vec3 rightEnd = _collision.ResolveMovement(p.Position, p.Position + right * probe, p.GroundY);
+        float leftScore = HorizontalDistance(p.Position, leftEnd) * 10f - HorizontalDistance(leftEnd, searchTarget);
+        float rightScore = HorizontalDistance(p.Position, rightEnd) * 10f - HorizontalDistance(rightEnd, searchTarget);
+        return leftScore >= rightScore ? left : right;
+    }
+
+    private static float HorizontalDistance(Vec3 a, Vec3 b)
+    {
+        float x = a.X - b.X, z = a.Z - b.Z;
+        return MathF.Sqrt(x * x + z * z);
+    }
+
+    /// <summary>bot 开火：仅本 tick 视野内且已进入 BotFireRange 时允许，复用同一射线命中。</summary>
     private void ResolveBotFire(ServerPlayer p)
     {
         var target = GetBotTarget(p);
         if (target is null) return;
 
         Vec3 toTarget = target.Position - p.Position;
-        float dist = toTarget.Magnitude;
-        if (dist > Settings.FireRange) return;
+        float dist = new Vec3(toTarget.X, 0f, toTarget.Z).Magnitude;
+        if (!p.BotHasVisualContact || dist > Settings.BotFireRange) return;
         if (ServerTick < p.NextAllowedFireServerTick) return;
 
         // 瞄准点：目标脚底 + 眼睛高度 + 瞄准误差（随距离放大，防激光枪）
@@ -709,7 +872,7 @@ public sealed class GameWorld
         Vec3 aimDir = (aimBase - origin).Normalized();
 
         // 大致面向目标才开枪（防止后撤/转向时乱扫）
-        Vec3 toDir = dist > 1e-4f ? toTarget * (1f / dist) : new Vec3(0f, 0f, 1f);
+        Vec3 toDir = dist > 1e-4f ? new Vec3(toTarget.X, 0f, toTarget.Z) * (1f / dist) : new Vec3(0f, 0f, 1f);
         float facing = aimDir.X * toDir.X + aimDir.Y * toDir.Y + aimDir.Z * toDir.Z;
         if (facing < 0.85f) return;
 
@@ -874,11 +1037,10 @@ public sealed class GameWorld
 
     private void ApplyDamage(ServerPlayer shooter, ServerPlayer target, Vec3 hit, int damage)
     {
-        // 训练 bot 默认只验证瞄准/同步，不对真人造成伤害；单独记录，避免日志看起来像
-        // “命中但 HP 没变”的异常。
+        // 仅保留通用零伤害保护；训练 Bot 默认伤害为 1，正常走权威受击反馈。
         if (damage <= 0)
         {
-            Console.WriteLine($"[训练] 命中: P{shooter.PlayerId} → P{target.PlayerId}（Bot伤害=0，目标HP保持 {Math.Max(0, target.Health)}）");
+            Console.WriteLine($"[训练] 零伤害命中: P{shooter.PlayerId} → P{target.PlayerId}（目标HP保持 {Math.Max(0, target.Health)}）");
             return;
         }
 

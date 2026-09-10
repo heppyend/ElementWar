@@ -50,6 +50,8 @@ namespace ElementWar.Net
         private int _slideTicksRemaining;
         private Vector3 _slideDirection = Vector3.forward;
         private bool _slideSprintBoost;
+        private bool _awaitingAuthoritativeBaseline;
+        private int _airborneSnapshotStreak;
         private bool _settlementPlayback;
         private float _settlementElapsed;
         private float _settlementDuration;
@@ -73,6 +75,14 @@ namespace ElementWar.Net
         public float SpeedBlend => _speedBlend;
         public bool IsSliding => _isSliding;
         public int SlideTicksRemaining => _slideTicksRemaining;
+        public string DebugVisualState => _model != null && _model.isDead ? "Dead" : _animState switch
+        {
+            1 => "Move",
+            2 => "Aiming",
+            3 => "Hover",
+            4 => "Slide",
+            _ => "Idle",
+        };
 
         public void ApplyRules(RuleProfile profile)
         {
@@ -136,6 +146,20 @@ namespace ElementWar.Net
             _isGrounded = true;
             _isSliding = false;
             _slideTicksRemaining = 0;
+            _animState = -1; // 重生后必须强制从 Die2 切回服务器最新的移动表现状态。
+            _airborneSnapshotStreak = 0;
+        }
+
+        /// <summary>出生或重生后，在首个完整快照抵达前保持稳定的地面表现。</summary>
+        public void BeginAuthoritativeBaseline()
+        {
+            _awaitingAuthoritativeBaseline = true;
+            _verticalSpeed = 0f;
+            _isGrounded = true;
+            _isSliding = false;
+            _slideTicksRemaining = 0;
+            _animState = -1;
+            _airborneSnapshotStreak = 0;
         }
 
         /// <summary>用完整权威移动状态建立重放基线。</summary>
@@ -144,7 +168,7 @@ namespace ElementWar.Net
             transform.position = new Vector3(state.x, state.y, state.z);
             bodyYawDeg = state.bodyYawDeg;
             _verticalSpeed = state.verticalSpeed;
-            _isGrounded = state.isGrounded;
+            _isGrounded = StabilizeAuthoritativeGroundedState(state);
             _isSliding = state.isSliding;
             _slideTicksRemaining = Mathf.Max(0, state.slideTicksRemaining);
             _slideDirection = new Vector3(state.slideDirectionX, 0f, state.slideDirectionZ);
@@ -154,6 +178,35 @@ namespace ElementWar.Net
                 _slideDirection.Normalize();
             _slideSprintBoost = state.slideSprintBoost;
             transform.rotation = Quaternion.Euler(0f, bodyYawDeg, 0f);
+            _awaitingAuthoritativeBaseline = false;
+        }
+
+        /// <summary>已贴地且没有上升速度的快照，不能继续驱动 Hover。</summary>
+        public static bool NormalizeGroundedState(Vector3 position, float verticalSpeed, bool reportedGrounded, float groundY)
+        {
+            if (reportedGrounded || verticalSpeed > 0.01f) return reportedGrounded;
+            const float groundTolerance = 0.03f;
+            if (position.y <= groundY + groundTolerance) return true;
+            return PvpCollisionWorld.TryGetWalkableHeight(position.x, position.z, position.y - groundY,
+                WalkableStepHeight, out float walkableY)
+                && position.y <= walkableY + groundY + groundTolerance;
+        }
+
+        /// <summary>死亡/重生邻近的单帧落地抖动不应把表现层反复切到 Hover；主动起跳仍立即生效。</summary>
+        private bool StabilizeAuthoritativeGroundedState(PlayerSnapshotMessage state)
+        {
+            bool reportedGrounded = NormalizeGroundedState(transform.position, state.verticalSpeed, state.isGrounded, _groundY);
+            if (reportedGrounded)
+            {
+                _airborneSnapshotStreak = 0;
+                return true;
+            }
+            if (state.verticalSpeed > 0.01f)
+            {
+                _airborneSnapshotStreak = 3; // 上升跳跃不可延迟。
+                return false;
+            }
+            return ++_airborneSnapshotStreak < 3;
         }
 
         /// <summary>按当前输入计算本 tick 要发给服务器的权威朝向。</summary>
@@ -311,7 +364,7 @@ namespace ElementWar.Net
             if (_hipIK != null) _hipIK.weight = 1f - _aimIKWeight;
 
             // 站立瞄准仍保持瞄准 IK，但不要进入八向移动动画；只有实际有水平输入时才切到 Aiming locomotion。
-            int desired = _isSliding ? 4 : !_isGrounded ? 3 : aiming && moving ? 2 : moving ? 1 : 0;
+            int desired = _isSliding ? 4 : (!_awaitingAuthoritativeBaseline && !_isGrounded) ? 3 : aiming && moving ? 2 : moving ? 1 : 0;
             if (desired != _animState)
             {
                 _animState = desired;

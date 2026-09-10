@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": { "title": "ElementWar PVE 与 PVP 运行时架构", "locale": "zh-CN", "quality_profile": "showcase", "viewBox": [1280, 620] },
+  "components": [
+    { "id": "input", "type": "frontend", "label": "玩家输入", "sublabel": "New Input System", "tag": "PVE / PVP", "pos": [40, 292], "size": [145, 68] },
+    { "id": "pve", "type": "backend", "label": "PVE PlayerController", "sublabel": "状态机 · 相机 · CharacterController", "tag": "本地运行时", "pos": [255, 130], "size": [210, 68] },
+    { "id": "combat", "type": "backend", "label": "PVE Weapon 与 Enemy", "sublabel": "弹道 · 命中 · AI", "tag": "本地玩法闭环", "pos": [545, 130], "size": [190, 68] },
+    { "id": "client", "type": "frontend", "label": "PVP NetClient", "sublabel": "预测 · 快照筛选 · 生命周期基线", "tag": "Unity 客户端", "pos": [255, 445], "size": [220, 68] },
+    { "id": "udp", "type": "messagebus", "label": "UDP JSON", "sublabel": "输入意图 · 快照 · 可靠事件", "tag": "60 Hz", "pos": [560, 445], "size": [190, 68] },
+    { "id": "server", "type": "backend", "label": "UdpGameServer", "sublabel": "会话 · ACK · Bot 调参", "tag": ".NET 服务端", "pos": [830, 445], "size": [185, 68] },
+    { "id": "world", "type": "backend", "label": "GameWorld", "sublabel": "权威模拟 · 碰撞 · 命中 · 重生", "tag": "唯一裁定者", "pos": [1065, 445], "size": [190, 68] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Unity 客户端", "wraps": ["input", "pve", "combat", "client"], "pad": 24 },
+    { "kind": "region", "label": "独立 .NET UDP 服务器", "wraps": ["server", "world"], "pad": 24 }
+  ],
+  "connections": [
+    { "id": "input-pve", "from": "input", "to": "pve", "label": "PVE 输入", "variant": "default", "labelDy": -25 },
+    { "id": "pve-combat", "from": "pve", "to": "combat", "label": "状态、开火与受击", "variant": "emphasis", "labelAt": [505, 212] },
+    { "id": "input-client", "from": "input", "to": "client", "label": "PVP 输入", "variant": "default", "labelDy": 26 },
+    { "id": "client-udp", "from": "client", "to": "udp", "label": "上行意图 / 下行快照", "variant": "emphasis", "labelAt": [518, 527] },
+    { "id": "udp-server", "from": "udp", "to": "server", "label": "UDP datagram", "variant": "emphasis", "labelDy": 32 },
+    { "id": "server-world", "from": "server", "to": "world", "label": "60 Hz 队列与裁定", "variant": "emphasis", "labelAt": [1040, 527] }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "PVE", "items": ["Unity 本地状态机、CharacterController 与 PVE 武器/敌人组成闭环。", "PVE 命中不参与 PVP 裁定。"] },
+    { "dot": "emerald", "title": "PVP", "items": ["客户端只传输入与开火意图；GameWorld 决定命中、血量、死亡与重生。", "NetClient 在死亡或重生后用完整权威快照建立生命状态基线。"] }
+  ]
+}

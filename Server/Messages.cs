@@ -34,6 +34,26 @@ public sealed class ServerWelcomeMessage
     [JsonPropertyName("spawnY")] public float SpawnY { get; set; }
     [JsonPropertyName("spawnZ")] public float SpawnZ { get; set; }
     [JsonPropertyName("spawnBodyYawDeg")] public float SpawnBodyYawDeg { get; set; }
+    [JsonPropertyName("botFireRange")] public float BotFireRange { get; set; }
+    [JsonPropertyName("botVisionRange")] public float BotVisionRange { get; set; }
+    [JsonPropertyName("botFieldOfViewDegrees")] public float BotFieldOfViewDegrees { get; set; }
+    [JsonPropertyName("botMoveSpeedMultiplier")] public float BotMoveSpeedMultiplier { get; set; }
+}
+
+public sealed class BotTuningRequestMessage
+{
+    [JsonPropertyName("type")] public string Type { get; set; } = "botTuningRequest";
+    [JsonPropertyName("botFireRange")] public float BotFireRange { get; set; }
+    [JsonPropertyName("botVisionRange")] public float BotVisionRange { get; set; }
+    [JsonPropertyName("botFieldOfViewDegrees")] public float BotFieldOfViewDegrees { get; set; }
+}
+
+public sealed class BotTuningStateMessage
+{
+    [JsonPropertyName("type")] public string Type { get; set; } = "botTuningState";
+    [JsonPropertyName("botFireRange")] public float BotFireRange { get; set; }
+    [JsonPropertyName("botVisionRange")] public float BotVisionRange { get; set; }
+    [JsonPropertyName("botFieldOfViewDegrees")] public float BotFieldOfViewDegrees { get; set; }
 }
 
 public sealed class RulesRejectedMessage

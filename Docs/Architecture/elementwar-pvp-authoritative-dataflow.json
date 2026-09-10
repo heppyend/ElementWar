@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": { "title": "ElementWar PVP 权威数据流", "locale": "zh-CN", "quality_profile": "showcase", "viewBox": [1068, 620] },
+  "stages": [{ "label": "Unity 客户端" }, { "label": "UDP" }, { "label": "服务器入口" }, { "label": "权威模拟" }, { "label": "客户端表现" }],
+  "nodes": [
+    { "id": "intent", "type": "frontend", "label": "输入与开火意图", "sublabel": "客户端不提交命中或血量", "tag": "上行", "stage": 0, "row": 1 },
+    { "id": "transport", "type": "messagebus", "label": "UDP JSON", "sublabel": "快照不可靠；事件可靠", "tag": "60 Hz", "stage": 1, "row": 1 },
+    { "id": "entry", "type": "backend", "label": "UdpGameServer", "sublabel": "会话 · ACK · Bot 调参", "tag": "接收与广播", "stage": 2, "row": 1 },
+    { "id": "world", "type": "backend", "label": "GameWorld", "sublabel": "移动 · 碰撞 · 命中 · 重生", "tag": "权威裁定", "stage": 3, "row": 1 },
+    { "id": "bot", "type": "backend", "label": "训练 Bot", "sublabel": "FOV · 掩体视线 · 沿墙搜索", "tag": "服务器内", "stage": 3, "row": 2 },
+    { "id": "presentation", "type": "frontend", "label": "PVP 角色表现", "sublabel": "预测 · 插值 · 生命基线", "tag": "下行表现", "stage": 4, "row": 1, "width": 130 }
+  ],
+  "flows": [
+    { "id": "intent-transport", "from": "intent", "to": "transport", "label": "PlayerInput / Fire", "classification": "上行意图", "variant": "emphasis", "labelDy": -28 },
+    { "id": "transport-entry", "from": "transport", "to": "entry", "label": "datagram", "classification": "接收", "variant": "default", "labelDy": -28 },
+    { "id": "entry-world", "from": "entry", "to": "world", "label": "排队至 Tick", "classification": "服务器内", "variant": "emphasis", "labelDy": -28 },
+    { "id": "world-bot", "from": "world", "to": "bot", "label": "目标与静态碰撞", "classification": "服务器内", "variant": "default", "fromSide": "bottom", "toSide": "top", "route": "straight", "labelAt": [825, 325] },
+    { "id": "world-presentation", "from": "world", "to": "presentation", "label": "全量快照 / Death / Respawn", "classification": "权威下行结果", "variant": "security", "labelAt": [853, 428] }
+  ],
+  "cards": []
+}

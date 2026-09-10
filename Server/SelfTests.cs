@@ -18,10 +18,14 @@ public static class SelfTests
         CenterCoverUsesConcaveOutline();
         BakedProfileBlocksMovementAndReturnsSurfaceHit();
         TrainingBotInitializesCombatState();
+        TrainingBotHonorsFieldOfViewAndFireRange();
+        TrainingBotSightIsBlockedByStaticCover();
+        TrainingBotFollowsWallAfterRepeatedSearchBlocks();
         JumpSurvivesCollisionResolution();
+        AirbornePlayerLandsWhenInputStops();
         AuthoritativeAmmoReloadsFromIntent();
         RulesValidatorRejectsInvalidProfiles();
-        Console.WriteLine("[SelfTest] 15/15 passed");
+        Console.WriteLine("[SelfTest] 19/19 passed");
     }
 
     private static void AuthoritativeAmmoReloadsFromIntent()
@@ -233,6 +237,84 @@ public static class SelfTests
         world.StepFrame(1f / settings.ServerTickRate);
     }
 
+    private static void TrainingBotHonorsFieldOfViewAndFireRange()
+    {
+        var settings = new GameWorldSettings
+        {
+            EnableBots = true,
+            BotFireRange = 10f,
+            BotFieldOfViewDegrees = 120f,
+            BotAimErrorBase = 0f,
+            BotAimErrorFactor = 0f,
+        };
+        var world = new GameWorld(settings);
+        var human = world.AddPlayer("P1", 0);
+        var bot = world.Players.Values.Single(p => p.IsBot);
+        bot.Position = new Vec3(20f, bot.GroundY, 20f);
+        human.Position = new Vec3(20f, human.GroundY, 15f); // bot 身后
+        bot.BodyYawDeg = 0f;
+        int healthBefore = human.Health;
+        world.StepFrame(1f / settings.ServerTickRate);
+        Assert(!bot.BotHasVisualContact, "target behind bot must be outside the 120 degree field of view");
+        Assert(human.Health == healthBefore, "bot must not fire on the tick where target is outside its field of view");
+
+        bot.BodyYawDeg = 180f;
+        world.StepFrame(1f / settings.ServerTickRate);
+        Assert(bot.BotHasVisualContact, "target directly ahead must enter bot field of view");
+        Assert(human.Health == healthBefore - settings.BotFireDamage,
+            "bot fire inside field of view and BotFireRange must apply configured training damage");
+    }
+
+    private static void TrainingBotSightIsBlockedByStaticCover()
+    {
+        var settings = new GameWorldSettings
+        {
+            EnableBots = true,
+            BotFireRange = 30f,
+            BotVisionRange = 30f,
+            BotAimErrorBase = 0f,
+            BotAimErrorFactor = 0f,
+        };
+        var world = new GameWorld(settings);
+        var human = world.AddPlayer("P1", 0);
+        var bot = world.Players.Values.Single(p => p.IsBot);
+        bot.Position = new Vec3(0f, bot.GroundY, 0f);
+        bot.BodyYawDeg = 0f;
+        // 旧场景回退的 (0, 12) 掩体位于两者正中；视线命中静态体后不可见、不可开火。
+        human.Position = new Vec3(0f, human.GroundY, 20f);
+        int healthBefore = human.Health;
+        world.StepFrame(1f / settings.ServerTickRate);
+        Assert(!bot.BotHasVisualContact, "static cover must block bot line of sight");
+        Assert(human.Health == healthBefore, "bot must not fire through static cover");
+    }
+
+    private static void TrainingBotFollowsWallAfterRepeatedSearchBlocks()
+    {
+        var settings = new GameWorldSettings
+        {
+            EnableBots = true,
+            BotLostSightSeconds = 0f,
+            BotBlockedMoveTickThreshold = 3,
+            BotWallFollowTicks = 30,
+            BotDecisionTicksMin = 10000,
+            BotDecisionTicksMax = 10000,
+        };
+        var world = new GameWorld(settings);
+        var human = world.AddPlayer("P1", 0);
+        var bot = world.Players.Values.Single(p => p.IsBot);
+        // bot 已贴近 (0, 12) 掩体南侧，目标在北侧；直线搜索会连续顶墙。
+        bot.Position = new Vec3(0f, bot.GroundY, 11.08f);
+        bot.BodyYawDeg = 0f;
+        bot.BotLastSeenTick = -1000;
+        bot.BotNextDecisionTick = int.MaxValue;
+        bot.BotSearchOffset = Vec3.Zero;
+        human.Position = new Vec3(0f, human.GroundY, 20f);
+
+        for (int i = 0; i < 12; i++) world.StepFrame(1f / settings.ServerTickRate);
+        Assert(bot.BotWallFollowTicksRemaining > 0, "repeated blocked search movement must enter wall-follow state");
+        Assert(MathF.Abs(bot.Position.X) > 0.02f, "wall-follow state must create tangential movement instead of repeatedly pushing into the wall");
+    }
+
     private static void JumpSurvivesCollisionResolution()
     {
         var settings = new GameWorldSettings();
@@ -241,6 +323,20 @@ public static class SelfTests
         Assert(world.TryQueueInput(player.PlayerId, new PlayerInputMessage { InputTick = 1, IsJumping = true }), "jump input should be accepted");
         world.StepFrame(1f / settings.ServerTickRate);
         Assert(player.Position.Y > player.GroundY, "collision resolution must not reset jump height");
+    }
+
+    private static void AirbornePlayerLandsWhenInputStops()
+    {
+        var settings = new GameWorldSettings { InputHoldTimeoutTicks = 0 };
+        var world = new GameWorld(settings);
+        var player = world.AddPlayer("P1", 0);
+        Assert(world.TryQueueInput(player.PlayerId, new PlayerInputMessage { InputTick = 1, IsJumping = true }),
+            "jump input should queue before no-input landing test");
+        world.StepFrame(1f / settings.ServerTickRate);
+        Assert(!player.IsGrounded, "player should be airborne after jump");
+        for (int i = 0; i < 120; i++) world.StepFrame(1f / settings.ServerTickRate);
+        Assert(player.IsGrounded && MathF.Abs(player.Position.Y - player.GroundY) < 0.0001f,
+            "airborne player must land even after input timeout");
     }
 
     private static void AssertNear(float actual, float expected, string name)

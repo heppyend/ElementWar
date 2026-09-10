@@ -77,6 +77,10 @@ namespace ElementWar.Net
         private GameRulesDocument _rules;
         private string _rulesContentHash = "";
         private bool _rulesReady;
+        private float _botFireRange;
+        private float _botVisionRange = 24f;
+        private float _botMoveSpeedMultiplier = 0.5f;
+        private float _botFieldOfViewDegrees = 120f;
 
         private MyInputSystem _input;
         private Camera _mainCamera;
@@ -86,6 +90,9 @@ namespace ElementWar.Net
         private readonly HashSet<long> _recentEventIds = new();
         private readonly Queue<long> _recentEventOrder = new();
         private readonly SortedDictionary<int, PlayerInputMessage> _pendingInputs = new();
+        private int _localLifeStateVersion;
+        private int _localMinimumSnapshotTick;
+        private bool _awaitingLocalLifeBaseline;
         private Transform _localAimTarget;   // PVP 瞄准 IK 目标（预制体约束源是空的，运行时补一个接准心）
 
         // 输入采样（每帧更新，供 PvPMotor 与上报共用）
@@ -140,6 +147,10 @@ namespace ElementWar.Net
         /// 绝不等同于暂停服务器或其他客户端。
         /// </summary>
         public bool IsLocalGameplayPaused => _localGameplayPaused;
+        public float BotFireRange => _botFireRange;
+        public float BotVisionRange => _botVisionRange;
+        public float BotMoveSpeedMultiplier => _botMoveSpeedMultiplier;
+        public float BotFieldOfViewDegrees => _botFieldOfViewDegrees;
 
         /// <summary>计分板：playerId → score（由快照更新，PVPHealthUI 读取）。</summary>
         public readonly Dictionary<int, int> Scores = new();
@@ -552,6 +563,9 @@ namespace ElementWar.Net
                     case Msg.Hit:
                         HandleHit(JsonUtility.FromJson<HitEventMessage>(json));
                         break;
+                    case Msg.BotTuningState:
+                        ApplyBotTuning(JsonUtility.FromJson<BotTuningStateMessage>(json));
+                        break;
                     case Msg.Death:
                         HandleReliableEvent(json);
                         break;
@@ -586,6 +600,13 @@ namespace ElementWar.Net
             _serverTickRate = w.serverTickRate;
             _serverSessionId = w.sessionId ?? "";
             _winScore = w.winScore;
+            _botMoveSpeedMultiplier = Mathf.Clamp(w.botMoveSpeedMultiplier, 0.1f, 1f);
+            ApplyBotTuning(new BotTuningStateMessage
+            {
+                botFireRange = w.botFireRange,
+                botVisionRange = w.botVisionRange,
+                botFieldOfViewDegrees = w.botFieldOfViewDegrees,
+            });
             _inputTick = w.serverTick; // 对齐服务器 tick，避免输入被判太旧
             _lastServerTick = w.serverTick;
             _connected = true;
@@ -600,9 +621,11 @@ namespace ElementWar.Net
                     _localMotor = _localModel.gameObject.GetComponent<PvPMotor>();
                     if (_localMotor == null) _localMotor = _localModel.gameObject.AddComponent<PvPMotor>();
                     _localMotor.ApplyRules(_rules.pvp_1v1);
+                    BeginLocalLifeBaseline(0, w.serverTick);
                     _localModel.disableStateMachine = true;
                     // PVP 无 AI 随从：禁用 NavMeshAgent，避免与 PvPMotor 抢位移
                     if (_localModel.navMeshAgent != null) _localModel.navMeshAgent.enabled = false;
+                    _localModel.EnsureStateDebugLabel(GetLocalPvpStateDebugText);
                 }
                 WireLocalAimTarget(); // PVP 瞄准 IK：约束源空 → 补运行时 AimTarget 接准心
             }
@@ -619,6 +642,29 @@ namespace ElementWar.Net
             _connected = false;
             _socket?.Dispose();
             _socket = null;
+        }
+
+        /// <summary>训练面板只发请求；真正采用的距离/视野角以服务器回传为准。</summary>
+        public void RequestBotTuning(float fireRange, float visionRange, float fieldOfViewDegrees)
+        {
+            if (!_connected || _socket == null) return;
+            var request = new BotTuningRequestMessage
+            {
+                botFireRange = fireRange,
+                botVisionRange = visionRange,
+                botFieldOfViewDegrees = fieldOfViewDegrees,
+            };
+            _socket.SendJson(JsonUtility.ToJson(request));
+        }
+
+        private void ApplyBotTuning(BotTuningStateMessage state)
+        {
+            if (state == null || state.botFireRange <= 0f || state.botVisionRange < state.botFireRange || state.botFieldOfViewDegrees <= 0f) return;
+            _botFireRange = state.botFireRange;
+            _botVisionRange = state.botVisionRange;
+            _botFieldOfViewDegrees = state.botFieldOfViewDegrees;
+            foreach (var visual in FindObjectsOfType<BotCombatDebugView>())
+                visual.ApplyAuthoritativeSettings(_botFireRange, _botVisionRange, _botFieldOfViewDegrees);
         }
 
         private void HandlePong(PongMessage pong)
@@ -719,6 +765,8 @@ namespace ElementWar.Net
                 else BotIds.Remove(ps.playerId);
                 if (ps.playerId == _playerId)
                 {
+                    if (!AcceptLocalSnapshot(ps, snap.serverTick))
+                        continue;
                     _hasLocalSnapshot = true;
                     _localHealth = ps.health;
                     _localMaxHealth = ps.maxHealth;
@@ -738,7 +786,8 @@ namespace ElementWar.Net
                     }
                     if (av != null)
                     {
-                        av.ApplyPlayerState(ps, snap.serverTick);
+                        if (!av.ApplyPlayerState(ps, snap.serverTick))
+                            continue;
                         av.ApplyHealth(ps.health, ps.maxHealth);
                         av.ApplyAmmo(ps.magazineAmmo, ps.reserveAmmo, ps.isReloading);
                     }
@@ -775,6 +824,12 @@ namespace ElementWar.Net
             var go = new GameObject($"RemoteAvatar_{ps.playerId}");
             var av = go.AddComponent<RemoteAvatar>();
             av.Setup(ps.playerId, prefab, new Vector3(ps.x, ps.y, ps.z), ps.bodyYawDeg, _serverTickRate);
+            if (ps.isBot)
+            {
+                var visual = go.AddComponent<BotCombatDebugView>();
+                visual.Setup(this, _botFireRange, _botVisionRange, _botFieldOfViewDegrees);
+                av.SetBotAnimationSpeed(_botMoveSpeedMultiplier);
+            }
             _remotes[ps.playerId] = av;
             return av;
         }
@@ -831,6 +886,7 @@ namespace ElementWar.Net
             }
             // 受击反馈：命中点播受击特效 + 相机震动（对应 PVE TakeDamage → ShakeCamera）
             Debug.Log($"[NetClient] 被 {h.shooterPlayerId} 击中 -{h.damage}");
+            _localModel?.PlayAuthoritativeHitReaction();
             if (_localModel != null && _localModel.weapon != null)
             {
                 var bulletPrefab = _localModel.weapon.bulletEffectPrefab;
@@ -854,7 +910,7 @@ namespace ElementWar.Net
             switch (e.type)
             {
                 case Msg.Death:
-                    if (_remotes.TryGetValue(e.playerId, out var av)) av.ApplyDeath();
+                    if (_remotes.TryGetValue(e.playerId, out var av)) av.ApplyDeath(e.lifeStateVersion, e.serverTick);
                     else if (e.playerId == _playerId) OnLocalDeath(e);
                     break;
                 case Msg.Respawn:
@@ -872,6 +928,7 @@ namespace ElementWar.Net
 
         private void OnLocalDeath(ReliableEventMessage e)
         {
+            BeginLocalLifeBaseline(e.lifeStateVersion, e.serverTick);
             _pendingInputs.Clear();
             _inputAccumulator = 0f;
             if (_localModel != null && !_localModel.isDead)
@@ -881,12 +938,40 @@ namespace ElementWar.Net
 
         private void OnLocalRespawn(ReliableEventMessage e)
         {
+            BeginLocalLifeBaseline(e.lifeStateVersion, e.serverTick);
             _inputTick = Mathf.Max(_inputTick, e.serverTick);
             _pendingInputs.Clear();
             if (_localMotor != null)
                 _localMotor.Teleport(new Vector3(e.x, e.y, e.z), e.bodyYawDeg);
             if (_localModel != null)
                 _localModel.ApplyRespawnNetwork(new Vector3(e.x, e.y, e.z), e.health, e.maxHealth);
+        }
+
+        private void BeginLocalLifeBaseline(int lifeStateVersion, int minimumSnapshotTick)
+        {
+            _localLifeStateVersion = Mathf.Max(_localLifeStateVersion, lifeStateVersion);
+            _localMinimumSnapshotTick = Mathf.Max(_localMinimumSnapshotTick, minimumSnapshotTick);
+            _awaitingLocalLifeBaseline = true;
+            _localMotor?.BeginAuthoritativeBaseline();
+        }
+
+        private bool AcceptLocalSnapshot(PlayerSnapshotMessage ps, int snapshotServerTick)
+        {
+            if (snapshotServerTick < _localMinimumSnapshotTick || ps.lifeStateVersion < _localLifeStateVersion)
+                return false;
+
+            _localLifeStateVersion = Mathf.Max(_localLifeStateVersion, ps.lifeStateVersion);
+            if (_awaitingLocalLifeBaseline)
+                _awaitingLocalLifeBaseline = false; // 当前生命版本的首个完整快照已到达。
+            return true;
+        }
+
+        private string GetLocalPvpStateDebugText()
+        {
+            string visualState = _localMotor != null ? _localMotor.DebugVisualState : "等待 Motor";
+            return _localModel != null
+                ? _localModel.GetPvpStateDebugText("本地", visualState)
+                : "PVP 本地";
         }
 
         private void OnMatchEnd(ReliableEventMessage e)

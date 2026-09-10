@@ -30,6 +30,8 @@ namespace ElementWar.Net
         public const string MatchEnd = "matchEnd";
         public const string Ack = "ack";
         public const string Goodbye = "goodbye";
+        public const string BotTuningRequest = "botTuningRequest";
+        public const string BotTuningState = "botTuningState";
     }
 
     [Serializable] public class ClientHelloMessage
@@ -55,12 +57,32 @@ namespace ElementWar.Net
         public string rulesContentHash = "";
         public float spawnX, spawnY, spawnZ;
         public float spawnBodyYawDeg;
+        public float botFireRange;
+        public float botVisionRange;
+        public float botFieldOfViewDegrees;
+        public float botMoveSpeedMultiplier;
     }
 
     [Serializable] public class RulesRejectedMessage
     {
         public string type = Msg.RulesRejected;
         public string reason = "";
+    }
+
+    [Serializable] public class BotTuningRequestMessage
+    {
+        public string type = Msg.BotTuningRequest;
+        public float botFireRange;
+        public float botVisionRange;
+        public float botFieldOfViewDegrees;
+    }
+
+    [Serializable] public class BotTuningStateMessage
+    {
+        public string type = Msg.BotTuningState;
+        public float botFireRange;
+        public float botVisionRange;
+        public float botFieldOfViewDegrees;
     }
 
     [Serializable] public class PlayerInputMessage

@@ -107,6 +107,7 @@ public sealed class UdpGameServer : IDisposable
                 case "ping": HandlePing(from, json); break;
                 case "ack": HandleAck(from, json); break;
                 case "goodbye": HandleGoodbye(from); break;
+                case "botTuningRequest": HandleBotTuningRequest(from, json); break;
                 default: break;
             }
             string key = from.ToString();
@@ -192,6 +193,10 @@ public sealed class UdpGameServer : IDisposable
             SpawnY = player.Position.Y,
             SpawnZ = player.Position.Z,
             SpawnBodyYawDeg = player.BodyYawDeg,
+            BotFireRange = _options.WorldSettings.BotFireRange,
+            BotVisionRange = _options.WorldSettings.BotVisionRange,
+            BotFieldOfViewDegrees = _options.WorldSettings.BotFieldOfViewDegrees,
+            BotMoveSpeedMultiplier = _options.WorldSettings.BotMoveSpeedMultiplier,
         };
         Send(conn.Endpoint, Serialize(welcome));
     }
@@ -249,6 +254,26 @@ public sealed class UdpGameServer : IDisposable
         var msg = JsonSerializer.Deserialize<ReloadRequestMessage>(json);
         if (msg is null || msg.PlayerId != conn.PlayerId) return;
         _world.TryQueueReload(conn.PlayerId, msg);
+    }
+
+    private void HandleBotTuningRequest(IPEndPoint from, string json)
+    {
+        string key = from.ToString();
+        if (!_clients.ContainsKey(key)) return;
+        var request = JsonSerializer.Deserialize<BotTuningRequestMessage>(json);
+        if (request is null || !_world.TryApplyBotTuning(request.BotFireRange, request.BotVisionRange, request.BotFieldOfViewDegrees)) return;
+
+        var state = new BotTuningStateMessage
+        {
+            Type = "botTuningState",
+            BotFireRange = _options.WorldSettings.BotFireRange,
+            BotVisionRange = _options.WorldSettings.BotVisionRange,
+            BotFieldOfViewDegrees = _options.WorldSettings.BotFieldOfViewDegrees,
+        };
+        string stateJson = Serialize(state);
+        foreach (var client in _clients.Values)
+            Send(client.Endpoint, stateJson);
+        Console.WriteLine($"[Bot] 调参: fireRange={state.BotFireRange:F1}, visionRange={state.BotVisionRange:F1}, fov={state.BotFieldOfViewDegrees:F0}");
     }
 
     private void HandlePing(IPEndPoint from, string json)
