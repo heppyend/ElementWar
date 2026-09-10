@@ -151,7 +151,16 @@ dotnet run
 
 ## 公开内容边界
 
-公开仓库主要提供代码、服务器、配置和技术链路说明。第三方模型、动画、音频、贴图、Prefab、场景和框架源码不随仓库重新分发，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+公开仓库主要提供代码、服务器、配置和技术链路说明。第三方模型、动画、音频、贴图、Prefab、场景和框架源码不随仓库重新分发。
+
+## 开源技术致谢与许可
+
+本项目在架构设计和工程实践中参考了以下开源项目；每项的使用边界、作者、原始地址和许可证说明均见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。这不是对原项目源码、资源或商标的再授权，也不代表原作者认可或参与本项目。
+
+- [Archify](https://github.com/tt-a1i/archify) — 作者 `tt-a1i`；本仓库的交互式架构图由其工具生成，遵循其 MIT 许可的署名要求。
+- [BBB-Nexus](https://github.com/bunkerboy258/BBB-Nexus) — 作者 `bunkerboy258`；借鉴意图、黑板、分层状态与表现驱动解耦思路，不重新分发其框架源码。
+- [YokiFrame](https://github.com/HinataYoki/YokiFrame) — 作者 `HinataYoki`；借鉴分层、事件、状态机、对象池与模块边界思路，不重新分发其框架源码。
+- [Fantasy](https://github.com/qq362946/Fantasy) — 作者 `qq362946`；借鉴协议、会话与服务端边界设计，不重新分发其框架源码；请同时遵守其上游许可证中的附加限制。
 
 ## 协作
 
