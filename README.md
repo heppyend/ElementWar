@@ -61,6 +61,28 @@ PVP：NetClient → UDP → UdpGameServer
                   GameWorld → Snapshot / Event
 ```
 
+## 可视化架构图
+
+以下为 GitHub 可直接预览的静态图；交互版保留主题切换、缩放和链路追踪，需下载 HTML 后在浏览器中打开。图表由 [Archify](https://github.com/tt-a1i/archify) 生成，署名与许可说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+### PVE 与 PVP 运行时总览
+
+[打开交互版](Docs/Architecture/ElementWar-Architecture.html)
+
+![ElementWar PVE 与 PVP 运行时架构](Docs/Architecture/ElementWar-Architecture.visual-check.1440x900.light.png)
+
+### PVE 玩家状态机
+
+[打开交互版](Docs/Architecture/ElementWar-PVE-Player-Lifecycle.html)
+
+![ElementWar PVE 玩家状态机](Docs/Architecture/ElementWar-PVE-Player-Lifecycle.visual-check.1440x900.light.png)
+
+### PVP 权威数据流
+
+[打开交互版](Docs/Architecture/ElementWar-PVP-Dataflow.html)
+
+![ElementWar PVP 权威数据流](Docs/Architecture/ElementWar-PVP-Dataflow.visual-check.1440x900.light.png)
+
 ## PVE 实现过程
 
 ### 角色控制
